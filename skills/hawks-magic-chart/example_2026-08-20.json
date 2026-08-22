@@ -1,0 +1,21 @@
+{
+  "footer": "試合なしの日は直前のマジックを持ち越し。対戦相手ロゴは試合日のみ表示。",
+  "data": [
+    {"date": "2026-08-05", "magic": 37, "opponent": "F"},
+    {"date": "2026-08-06", "magic": 37, "opponent": "F"},
+    {"date": "2026-08-07", "magic": 35, "opponent": "L"},
+    {"date": "2026-08-08", "magic": 35, "opponent": "L"},
+    {"date": "2026-08-09", "magic": 33, "opponent": "L"},
+    {"date": "2026-08-10", "magic": 33, "opponent": null},
+    {"date": "2026-08-11", "magic": 32, "opponent": "M"},
+    {"date": "2026-08-12", "magic": 31, "opponent": "M"},
+    {"date": "2026-08-13", "magic": 30, "opponent": "M"},
+    {"date": "2026-08-14", "magic": 30, "opponent": "E"},
+    {"date": "2026-08-15", "magic": 29, "opponent": "E"},
+    {"date": "2026-08-16", "magic": 28, "opponent": "E"},
+    {"date": "2026-08-17", "magic": 28, "opponent": null},
+    {"date": "2026-08-18", "magic": 27, "opponent": "F"},
+    {"date": "2026-08-19", "magic": 27, "opponent": "F"},
+    {"date": "2026-08-20", "magic": 25, "opponent": "F"}
+  ]
+}
