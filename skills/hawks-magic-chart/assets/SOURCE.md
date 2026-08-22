@@ -16,7 +16,7 @@ Processing applied here:
 - crop transparent outer padding;
 - preserve the vector-rendered logo shapes;
 - normalize opponent assets to a 256×256 transparent canvas and equal-size circular frame;
-- apply the confirmed optical correction toward upper-right for M, E, and B;\n- normalize `B.png` as a solid Buffaloes navy circle with the original gold B monogram centered inside it, matching the filled-circle F/L/M/E badge system;
+- apply the confirmed optical correction toward upper-right for M and E;\n- normalize `B.png` as a solid Buffaloes navy circle at the same visible diameter as F/L/M/E, with a reduced original gold B monogram geometrically centered inside it;
 - keep the Hawks SH mark on a transparent 256×256 canvas for title placement.
 
 The marks may be protected trademarks even where a source page describes a simple text logo as public domain. Keep this repository private and confirm the relevant trademark and usage rules before commercial redistribution.
