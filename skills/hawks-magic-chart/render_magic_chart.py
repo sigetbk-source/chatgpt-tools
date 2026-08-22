@@ -1,179 +1,174 @@
 #!/usr/bin/env python3
-"""Render the fixed 16:9 Hawks pennant-magic step chart from JSON data."""
+"""Render a validated Hawks championship-magic step chart."""
 
 from __future__ import annotations
 
 import argparse
 import json
-from datetime import date, datetime, timedelta
+import os
+import sys
+import tempfile
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, ImageDraw, ImageFont
+os.environ.setdefault("MPLCONFIGDIR", str(Path(tempfile.gettempdir()) / "hawks-magic-chart-mpl"))
+
+import matplotlib
+
+matplotlib.use("Agg")
+
+import matplotlib.dates as mdates
+import matplotlib.image as mpimg
+import matplotlib.pyplot as plt
+from matplotlib import font_manager
+from matplotlib.offsetbox import AnnotationBbox, OffsetImage
 
 
 WIDTH = 2880
 HEIGHT = 1620
-BACKGROUND = "#FFF9E9"
-HAWKS_YELLOW = "#F4C400"
-INK = "#171717"
-GRID = "#D9D2BE"
-ASSET_DIR = Path(__file__).resolve().parent / "assets"
-FONT_CANDIDATES = (
-    Path("/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
-    Path("/System/Library/Fonts/Supplemental/AppleGothic.ttf"),
-    Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
-    Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-)
+DPI = 200
+SUPPORTED_OPPONENTS = {"F", "L", "M", "E", "B"}
 
 
-def font(size: int) -> ImageFont.FreeTypeFont:
-    for candidate in FONT_CANDIDATES:
-        if candidate.exists():
-            return ImageFont.truetype(str(candidate), size=size)
-    raise FileNotFoundError("No supported Japanese-capable font was found")
+class InputError(ValueError):
+    """Raised when chart input is unsafe to render."""
 
 
-def parse_date(value: str) -> date:
-    return datetime.strptime(value, "%Y-%m-%d").date()
+def load_and_validate(path: Path, assets_dir: Path) -> tuple[str, list[dict[str, Any]]]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise InputError(f"入力 JSON を読めません: {exc}") from exc
 
+    if not isinstance(payload, dict):
+        raise InputError("入力の最上位はオブジェクトにしてください")
+    title = payload.get("title")
+    entries = payload.get("entries")
+    if not isinstance(title, str) or not title.strip():
+        raise InputError("title は空でない文字列にしてください")
+    if not isinstance(entries, list) or not entries:
+        raise InputError("entries は空でない配列にしてください")
 
-def load_input(path: Path) -> dict[str, Any]:
-    with path.open(encoding="utf-8") as handle:
-        payload = json.load(handle)
-    points = payload.get("data")
-    if not isinstance(points, list) or not points:
-        raise ValueError("input must contain a non-empty data array")
-
+    parsed: list[dict[str, Any]] = []
     previous_date: date | None = None
     previous_magic: int | None = None
-    supported = {"F", "L", "M", "E", "B", None}
-    for index, point in enumerate(points):
-        if not isinstance(point, dict):
-            raise ValueError(f"data[{index}] must be an object")
-        point_date = parse_date(point["date"])
-        magic = point["magic"]
-        opponent = point.get("opponent")
-        if not isinstance(magic, int) or magic < 0:
-            raise ValueError(f"data[{index}].magic must be a non-negative integer")
-        if opponent not in supported:
-            raise ValueError(f"data[{index}].opponent is unsupported: {opponent!r}")
-        if previous_date is not None and point_date <= previous_date:
-            raise ValueError("dates must be strictly increasing")
-        if previous_date is not None and point_date != previous_date + timedelta(days=1):
-            raise ValueError("data must include every calendar date without gaps")
+
+    for index, raw in enumerate(entries):
+        if not isinstance(raw, dict):
+            raise InputError(f"entries[{index}] はオブジェクトにしてください")
+        try:
+            entry_date = date.fromisoformat(raw["date"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise InputError(f"entries[{index}].date は ISO 日付にしてください") from exc
+        magic = raw.get("magic")
+        opponent = raw.get("opponent")
+        if isinstance(magic, bool) or not isinstance(magic, int) or magic < 0:
+            raise InputError(f"entries[{index}].magic は 0 以上の整数にしてください")
+        if previous_date is not None and entry_date != previous_date + timedelta(days=1):
+            raise InputError("entries の日付は重複なしで1日ずつ連続させてください")
         if previous_magic is not None and magic > previous_magic:
-            raise ValueError("pennant magic must never increase")
-        if opponent is None and previous_magic is not None and magic != previous_magic:
-            raise ValueError("a no-game date must carry the previous magic number forward")
-        previous_date = point_date
+            raise InputError("マジックは前日から増やせません")
+        if opponent is not None:
+            if opponent not in SUPPORTED_OPPONENTS:
+                raise InputError(f"未対応の対戦相手コードです: {opponent!r}")
+            if not (assets_dir / f"{opponent}.png").is_file():
+                raise InputError(f"固定ロゴがありません: assets/{opponent}.png")
+        parsed.append({"date": entry_date, "magic": magic, "opponent": opponent})
+        previous_date = entry_date
         previous_magic = magic
-    return payload
+
+    if not (assets_dir / "hawks_sh.png").is_file():
+        raise InputError("固定ロゴがありません: assets/hawks_sh.png")
+    return title.strip(), parsed
 
 
-def paste_contained(canvas: Image.Image, asset: Path, box: tuple[int, int, int, int]) -> None:
-    image = Image.open(asset).convert("RGBA")
-    left, top, right, bottom = box
-    ratio = min((right - left) / image.width, (bottom - top) / image.height)
-    image = image.resize(
-        (max(1, round(image.width * ratio)), max(1, round(image.height * ratio))),
-        Image.Resampling.LANCZOS,
+def add_logo(ax: Any, path: Path, x: Any, y: float, zoom: float, coordinates: str = "data") -> None:
+    image = OffsetImage(mpimg.imread(path), zoom=zoom)
+    box = AnnotationBbox(image, (x, y), xycoords=coordinates, frameon=False, pad=0)
+    ax.add_artist(box)
+
+
+def render(title: str, entries: list[dict[str, Any]], assets_dir: Path, output: Path) -> None:
+    dates = [entry["date"] for entry in entries]
+    values = [entry["magic"] for entry in entries]
+    minimum = min(values)
+    maximum = max(values)
+
+    available_fonts = {font.name for font in font_manager.fontManager.ttflist}
+    font_family = next(
+        (name for name in ("Hiragino Sans", "Yu Gothic", "Noto Sans CJK JP") if name in available_fonts),
+        "sans-serif",
     )
-    x = left + ((right - left) - image.width) // 2
-    y = top + ((bottom - top) - image.height) // 2
-    canvas.alpha_composite(image, (x, y))
+    plt.rcParams.update({
+        "font.family": font_family,
+        "axes.unicode_minus": False,
+    })
+    fig, ax = plt.subplots(figsize=(WIDTH / DPI, HEIGHT / DPI), dpi=DPI)
+    fig.patch.set_facecolor("#fffdf6")
+    ax.set_facecolor("#fffdf6")
 
+    ax.step(dates, values, where="post", color="#111111", linewidth=4.5, zorder=3)
+    ax.scatter(dates, values, s=95, color="#f8cf21", edgecolor="#111111", linewidth=2, zorder=4)
 
-def centered_text(draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str, face: ImageFont.FreeTypeFont, fill: str) -> None:
-    box = draw.textbbox((0, 0), text, font=face)
-    draw.text((xy[0] - (box[2] - box[0]) / 2, xy[1] - (box[3] - box[1]) / 2), text, font=face, fill=fill)
-
-
-def render(payload: dict[str, Any], output: Path) -> None:
-    points = payload["data"]
-    magic_values = [point["magic"] for point in points]
-    dates = [parse_date(point["date"]) for point in points]
-
-    canvas = Image.new("RGBA", (WIDTH, HEIGHT), BACKGROUND)
-    draw = ImageDraw.Draw(canvas)
-
-    paste_contained(canvas, ASSET_DIR / "hawks_sh.png", (105, 68, 250, 213))
-    title = "’26 福岡ソフトバンクホークス 優勝マジック推移"
-    draw.text((280, 74), title, font=font(76), fill=INK)
-    start_label = f"{dates[0].year}/{dates[0].month}/{dates[0].day} M{magic_values[0]}点灯"
-    end_label = f"{dates[-1].month}/{dates[-1].day} M{magic_values[-1]}"
-    draw.text((284, 177), f"{start_label} → {end_label}", font=font(43), fill="#4B4B4B")
-    draw.rounded_rectangle((105, 265, 2775, 282), radius=8, fill=HAWKS_YELLOW)
-
-    chart_left, chart_top, chart_right, chart_bottom = 185, 390, 2735, 1290
-    y_min = max(0, min(magic_values) - 3)
-    y_max = max(magic_values) + 3
-    if y_max == y_min:
-        y_max += 1
-
-    def px(index: int) -> float:
-        if len(points) == 1:
-            return (chart_left + chart_right) / 2
-        return chart_left + index * (chart_right - chart_left) / (len(points) - 1)
-
-    def py(value: int) -> float:
-        return chart_top + (y_max - value) * (chart_bottom - chart_top) / (y_max - y_min)
-
-    tick_start = ((y_min + 4) // 5) * 5
-    for tick in range(tick_start, y_max + 1, 5):
-        y = round(py(tick))
-        draw.line((chart_left, y, chart_right, y), fill=GRID, width=3)
-        draw.text((82, y - 27), f"M{tick}", font=font(36), fill="#696458")
-
-    draw.line((chart_left, chart_bottom, chart_right, chart_bottom), fill="#877F6C", width=4)
-
-    line_points: list[tuple[float, float]] = []
-    for index, magic in enumerate(magic_values):
-        x, y = px(index), py(magic)
-        if index == 0:
-            line_points.append((x, y))
-        else:
-            previous_y = py(magic_values[index - 1])
-            line_points.extend(((x, previous_y), (x, y)))
-    if len(line_points) > 1:
-        draw.line(line_points, fill=INK, width=12)
-
-    for index, point in enumerate(points):
-        x, y = px(index), py(point["magic"])
-        draw.ellipse((x - 17, y - 17, x + 17, y + 17), fill=HAWKS_YELLOW, outline=INK, width=5)
-        if index > 0 and point["magic"] < points[index - 1]["magic"]:
-            label_x = x - 54 if index == len(points) - 1 else x + 54
-            label_y = y - 32
-        else:
-            label_x = x
-            label_y = y - 62
-        centered_text(draw, (round(label_x), round(label_y)), f"M{point['magic']}", font(35), INK)
-
-        opponent = point.get("opponent")
-        if opponent:
-            badge_top = min(round(y + 76), chart_bottom - 106)
-            paste_contained(
-                canvas,
-                ASSET_DIR / f"{opponent}.png",
-                (round(x - 46), badge_top, round(x + 46), badge_top + 92),
+    for entry in entries:
+        ax.annotate(
+            f"M{entry['magic']}",
+            (entry["date"], entry["magic"]),
+            xytext=(0, 14),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            fontsize=13,
+            fontweight="bold",
+            color="#111111",
+            zorder=5,
+        )
+        if entry["opponent"] is not None:
+            add_logo(
+                ax,
+                assets_dir / f"{entry['opponent']}.png",
+                entry["date"],
+                entry["magic"] - 0.95,
+                0.048,
             )
 
-        date_label = f"{dates[index].month}/{dates[index].day}"
-        centered_text(draw, (round(x), 1368), date_label, font(34), "#4B4B4B")
+    ax.set_xlim(dates[0] - timedelta(days=1.0), dates[-1] + timedelta(days=1.0))
+    ax.set_ylim(max(0, minimum - 3.2), maximum + 3.4)
+    ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%-m/%-d"))
+    ax.tick_params(axis="x", labelsize=12, length=0, pad=12)
+    ax.tick_params(axis="y", labelsize=11, length=0)
+    ax.grid(axis="y", color="#d9d4c5", linewidth=1, alpha=0.75)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.set_ylabel("優勝マジック", fontsize=13, fontweight="bold")
 
-    footer = payload.get("footer", "試合なしの日は直前のマジックを持ち越し。対戦相手ロゴは試合日のみ表示。")
-    draw.text((185, 1470), footer, font=font(31), fill="#6C665A")
+    subtitle = f"{dates[0].year}/{dates[0].month}/{dates[0].day} M{values[0]}点灯 → {dates[-1].month}/{dates[-1].day} M{values[-1]}"
+    fig.text(0.145, 0.935, title, fontsize=27, fontweight="bold", color="#111111", va="center")
+    fig.text(0.145, 0.893, subtitle, fontsize=15, color="#4b4b4b", va="center")
+    add_logo(ax, assets_dir / "hawks_sh.png", 0.035, 1.105, 0.075, coordinates="axes fraction")
+
+    fig.subplots_adjust(left=0.075, right=0.975, bottom=0.13, top=0.80)
     output.parent.mkdir(parents=True, exist_ok=True)
-    canvas.convert("RGB").save(output, format="PNG", optimize=True)
+    fig.savefig(output, dpi=DPI, facecolor=fig.get_facecolor(), metadata={"Software": "hawks-magic-chart"})
+    plt.close(fig)
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", type=Path, help="input JSON")
     parser.add_argument("output", type=Path, help="output PNG")
     args = parser.parse_args()
-    render(load_input(args.input), args.output)
+    assets_dir = Path(__file__).resolve().parent / "assets"
+    try:
+        title, entries = load_and_validate(args.input, assets_dir)
+        render(title, entries, assets_dir, args.output)
+    except InputError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

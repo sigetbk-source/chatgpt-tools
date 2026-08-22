@@ -1,5 +1,5 @@
 # Projects
 
-独立したアプリや実装プロジェクトを置く領域です。
+独立したアプリや実装プロジェクトを `projects/<name>/` 単位で管理します。
 
-- `ticket-launcher/`: チケット発売時刻に販売ページへ素早く移動するための iPhone アプリ
+- [`ticket-launcher/`](ticket-launcher/README.md): チケット発売時刻に販売ページへ移動する iPhone アプリ
