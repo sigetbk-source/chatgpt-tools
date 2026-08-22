@@ -1,5 +1,5 @@
 > [!NOTE]
-> このディレクトリは、独立リポジトリ [sigetbk-source/ticket-launcher](https://github.com/sigetbk-source/ticket-launcher) の `main`（`8513697bc9bfc28cd03f65eaa3e6c3bcacd11818`）を 2026-08-22 にコピーして集約したものです。元リポジトリは削除・アーカイブせず、変更せずに残しています。履歴の完全移植ではなく、GitHub 上の現行ファイル一式を優先したスナップショットです。
+> このディレクトリは、独立リポジトリ [sigetbk-source/ticket-launcher](https://github.com/sigetbk-source/ticket-launcher) の `main`（`8513697bc9bfc28cd03f65eaa3e6c3bcacd11818`）を 2026-08-23 にコピーして集約したものです。元リポジトリは削除・アーカイブせず、変更せずに残しています。履歴の完全移植ではなく、GitHub 上の現行ファイル一式を優先したスナップショットです。
 
 # Ticket Launcher
 
