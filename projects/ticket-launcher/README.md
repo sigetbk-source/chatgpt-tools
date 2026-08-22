@@ -3,30 +3,29 @@
 Ticket Launcher は、チケット発売時刻に販売ページへ素早く移動するための iPhone アプリです。
 
 > [!NOTE]
-> このディレクトリは、独立リポジトリ [`sigetbk-source/ticket-launcher`](https://github.com/sigetbk-source/ticket-launcher) の `main`（`8513697bc9bfc28cd03f65eaa3e6c3bcacd11818`）を 2026-08-23 にコピーしたスナップショットです。Git 履歴は移植しておらず、移行元リポジトリは変更・削除・アーカイブしていません。
+> このディレクトリは、ローカルの独立リポジトリ `ticket-launcher` の確認済みコミット `fe7231f8b4d7ac0d3297ca4ffa6add1f2cbad9a7`（`codex/mvp-implementation`）を 2026-08-23 にコピーしたスナップショットです。Git 履歴は移植していません。移行元リポジトリとその GitHub `main`（`8513697bc9bfc28cd03f65eaa3e6c3bcacd11818`）は変更・削除・アーカイブしていません。
 
-## このスナップショットの入口
+## 主要ファイル
 
-- `README.md`: プロジェクト概要、開発環境、開始手順
-- `docs/mvp-spec.md`: MVP の要求仕様と受け入れ条件
-- `docs/implementation-plan.md`: Xcode プロジェクト作成後の実装順序
+- `TicketLauncher/TicketLauncher.xcodeproj`: Xcode で開く開発入口
+- `TicketLauncher/TicketLauncher/`: SwiftUI アプリ本体
+- `TicketLauncher/TicketLauncherTests/`: 単体テスト
+- `docs/mvp-spec.md`: 現在の要求仕様と受け入れ条件
+- `docs/development-log.md`: 実装・検証履歴と未完了の実機確認
 - `DEVELOPMENT_RULES.md` / `AGENTS.md`: 開発・レビュー時のルール
-- `docs/development-log.md` / `CHANGELOG.md`: 検証状態と変更履歴
-
-参照した `main` は準備段階の文書スナップショットで、Xcode プロジェクトとアプリ実装をまだ含みません。開発を始める場合は、下記「開発を始める」と `docs/implementation-plan.md` を入口にしてください。
 
 ## MVP
 
 最初のリリースでは、次の流れだけを確実に実装します。
 
 1. イベント名、発売日時、販売 URL を手動登録する
-2. 発売 1 分前にローカル通知する
-3. アプリ内に秒単位のカウントダウンを表示する
-4. アプリが前面にある場合、発売時刻に販売 URL を開く
-5. アプリがバックグラウンドまたは端末がロック中の場合、通知をタップして販売 URL を開く
+2. 発売 5 分前と3 分前にローカル通知する
+3. 通知タップで発売待機画面を開き、カウントダウンする
+4. 待機画面を表示したままiPhoneをロックしなければ、発売時刻にSafariで販売 URL を自動で開く
+5. 発売済みイベントを履歴として保持する
 
 > [!IMPORTANT]
-> iOS は、バックグラウンド中のアプリが指定時刻に Safari を自動で開くことを保証しません。したがって「0 秒で自動オープン」はアプリが前面にある場合の動作とし、それ以外はローカル通知からの起動を正式な仕様にします。
+> 発売時刻の自動表示には、Ticket Launcherの発売待機画面を前面に表示し、iPhoneをロックせずに待つ必要があります。手動ロックやアプリ切り替え後は自動表示せず、画面のボタンから開きます。
 
 ## 開発環境
 
@@ -34,18 +33,16 @@ Ticket Launcher は、チケット発売時刻に販売ページへ素早く移�
 - Xcode（最新版の正式版を基準）
 - Swift / SwiftUI
 - iPhone 実機
-- 対象 OS: iOS 17 以降（初期方針。Xcode プロジェクト作成時に確定）
+- 対象 OS: iOS 17 以降
 
 ## 開発を始める
 
-現在は準備段階です。先に Xcode 本体と GitHub 認証を設定してください。
+Xcode プロジェクトを開き、署名先の Team と実機を選択してビルドします。
 
-1. App Store から Xcode をインストールする
-2. Xcode を一度起動し、追加コンポーネントを導入する
-3. GitHub へ接続できるように、Xcode または Git Credential Manager / SSH を設定する
-4. このリポジトリを取得する
-5. `docs/mvp-spec.md` を確認して Xcode プロジェクトを作成する
-6. iPhone 実機で通知、時刻境界、URL 起動を検証する
+1. `TicketLauncher/TicketLauncher.xcodeproj` を Xcode で開く
+2. `docs/mvp-spec.md` で現在の仕様を確認する
+3. generic iOS または Simulator でビルドする
+4. iPhone 実機で通知、ロック画面、URL 起動を検証する
 
 ## リポジトリ方針
 
@@ -65,7 +62,8 @@ GitHub 上の Markdown とコードを開発の正本とします。
 - [x] Private リポジトリ作成
 - [x] MVP の範囲と iOS 制約を文書化
 - [x] AI 開発標準ルールをリポジトリに登録
-- [ ] Xcode をインストール
-- [ ] SwiftUI プロジェクトを作成
-- [ ] MVP を実装
+- [x] Xcode をインストール
+- [x] SwiftUI プロジェクトを作成
+- [x] 手動登録・端末内保存・5分前/3分前通知・発売待機画面を実装
+- [x] 前面待機中の画面点灯維持と、発売時刻のSafari自動表示を実装
 - [ ] シミュレータと実機で受け入れテスト
