@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the fixed 16:9 Hawks pennant-magic step chart from JSON data."""
+"""Render the Hawks magic chart in the approved 2026-08-20 sample style."""
 
 from __future__ import annotations
 
@@ -12,26 +12,32 @@ from typing import Any
 from PIL import Image, ImageDraw, ImageFont
 
 
-WIDTH = 2880
-HEIGHT = 1620
-BACKGROUND = "#FFF9E9"
-HAWKS_YELLOW = "#F4C400"
-INK = "#171717"
-GRID = "#D9D2BE"
+WIDTH, HEIGHT = 2880, 1620
+WHITE = "#FFFFFF"
+BLACK = "#111111"
+HAWKS_YELLOW = "#F7B900"
+GRID = "#D8D8D8"
 ASSET_DIR = Path(__file__).resolve().parent / "assets"
-FONT_CANDIDATES = (
-    Path("/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
-    Path("/System/Library/Fonts/Supplemental/AppleGothic.ttf"),
-    Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
-    Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-)
 
 
-def font(size: int) -> ImageFont.FreeTypeFont:
-    for candidate in FONT_CANDIDATES:
+def _font_path() -> Path:
+    candidates = list(Path("/System/Library/Fonts").glob("*W8.ttc")) + [
+        Path("/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
+        Path("/System/Library/Fonts/Supplemental/AppleGothic.ttf"),
+    ]
+    for candidate in candidates:
         if candidate.exists():
-            return ImageFont.truetype(str(candidate), size=size)
-    raise FileNotFoundError("No supported Japanese-capable font was found")
+            return candidate
+    raise FileNotFoundError("Japanese-capable font not found")
+
+
+FONT_PATH = _font_path()
+REGULAR_FONT_PATH = Path("/System/Library/Fonts/Supplemental/AppleGothic.ttf")
+
+
+def face(size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
+    path = FONT_PATH if bold or not REGULAR_FONT_PATH.exists() else REGULAR_FONT_PATH
+    return ImageFont.truetype(str(path), size=size)
 
 
 def parse_date(value: str) -> date:
@@ -54,7 +60,7 @@ def load_input(path: Path) -> dict[str, Any]:
         point_date = parse_date(point["date"])
         magic = point["magic"]
         opponent = point.get("opponent")
-        if not isinstance(magic, int) or magic < 0:
+        if not isinstance(magic, int) or isinstance(magic, bool) or magic < 0:
             raise ValueError(f"data[{index}].magic must be a non-negative integer")
         if opponent not in supported:
             raise ValueError(f"data[{index}].opponent is unsupported: {opponent!r}")
@@ -71,109 +77,121 @@ def load_input(path: Path) -> dict[str, Any]:
     return payload
 
 
-def paste_contained(canvas: Image.Image, asset: Path, box: tuple[int, int, int, int]) -> None:
-    image = Image.open(asset).convert("RGBA")
+def paste_contained(canvas: Image.Image, path: Path, box: tuple[int, int, int, int]) -> None:
+    asset = Image.open(path).convert("RGBA")
     left, top, right, bottom = box
-    ratio = min((right - left) / image.width, (bottom - top) / image.height)
-    image = image.resize(
-        (max(1, round(image.width * ratio)), max(1, round(image.height * ratio))),
+    scale = min((right - left) / asset.width, (bottom - top) / asset.height)
+    asset = asset.resize(
+        (round(asset.width * scale), round(asset.height * scale)),
         Image.Resampling.LANCZOS,
     )
-    x = left + ((right - left) - image.width) // 2
-    y = top + ((bottom - top) - image.height) // 2
-    canvas.alpha_composite(image, (x, y))
+    x = left + ((right - left) - asset.width) // 2
+    y = top + ((bottom - top) - asset.height) // 2
+    canvas.alpha_composite(asset, (x, y))
 
 
-def centered_text(draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str, face: ImageFont.FreeTypeFont, fill: str) -> None:
-    box = draw.textbbox((0, 0), text, font=face)
-    draw.text((xy[0] - (box[2] - box[0]) / 2, xy[1] - (box[3] - box[1]) / 2), text, font=face, fill=fill)
+def centered(draw: ImageDraw.ImageDraw, x: float, y: float, text: str, font: ImageFont.FreeTypeFont, fill: str) -> None:
+    bounds = draw.textbbox((0, 0), text, font=font)
+    width = bounds[2] - bounds[0]
+    height = bounds[3] - bounds[1]
+    draw.text((x - width / 2, y - height / 2 - bounds[1]), text, font=font, fill=fill)
 
 
-def render(payload: dict[str, Any], output: Path) -> None:
+def render(payload: dict[str, Any], output_path: Path) -> None:
     points = payload["data"]
-    magic_values = [point["magic"] for point in points]
-    dates = [parse_date(point["date"]) for point in points]
+    dates = [parse_date(item["date"]) for item in points]
+    values = [item["magic"] for item in points]
 
-    canvas = Image.new("RGBA", (WIDTH, HEIGHT), BACKGROUND)
+    canvas = Image.new("RGBA", (WIDTH, HEIGHT), WHITE)
     draw = ImageDraw.Draw(canvas)
 
-    paste_contained(canvas, ASSET_DIR / "hawks_sh.png", (105, 68, 250, 213))
-    title = "’26 福岡ソフトバンクホークス 優勝マジック推移"
-    draw.text((280, 74), title, font=font(76), fill=INK)
-    start_label = f"{dates[0].year}/{dates[0].month}/{dates[0].day} M{magic_values[0]}点灯"
-    end_label = f"{dates[-1].month}/{dates[-1].day} M{magic_values[-1]}"
-    draw.text((284, 177), f"{start_label} → {end_label}", font=font(43), fill="#4B4B4B")
-    draw.rounded_rectangle((105, 265, 2775, 282), radius=8, fill=HAWKS_YELLOW)
+    # Header: approved SH placement, bold title, and black/yellow double rule.
+    paste_contained(canvas, ASSET_DIR / "hawks_sh.png", (72, 20, 270, 210))
+    draw.text((320, 58), "’26 福岡ソフトバンクホークス 優勝マジック推移", font=face(72), fill=BLACK)
+    draw.rectangle((320, 165, 2710, 174), fill=BLACK)
+    draw.rectangle((320, 183, 2710, 190), fill=HAWKS_YELLOW)
 
-    chart_left, chart_top, chart_right, chart_bottom = 185, 390, 2735, 1290
-    y_min = max(0, min(magic_values) - 3)
-    y_max = max(magic_values) + 3
-    if y_max == y_min:
-        y_max += 1
+    summary = (
+        f"{dates[0].year}/{dates[0].month}/{dates[0].day} M{values[0]}点灯"
+        f"  →  {dates[-1].month}/{dates[-1].day} M{values[-1]}"
+    )
+    summary_font = face(46)
+    summary_bounds = draw.textbbox((0, 0), summary, font=summary_font)
+    summary_width = summary_bounds[2] - summary_bounds[0]
+    pill_left = (WIDTH - summary_width) // 2 - 28
+    pill_right = (WIDTH + summary_width) // 2 + 28
+    draw.rounded_rectangle((pill_left, 206, pill_right, 294), radius=22, fill=BLACK)
+    centered(draw, WIDTH / 2, 250, summary, summary_font, WHITE)
 
-    def px(index: int) -> float:
+    chart_left, chart_top, chart_right, chart_bottom = 215, 345, 2780, 1425
+    first_x, last_x = 290, 2730
+    y_tick_min = max(0, min(values) - 1)
+    y_tick_max = max(values) + 1
+    plot_top = 350
+    plot_bottom = 1352
+
+    def x_at(index: int) -> float:
         if len(points) == 1:
-            return (chart_left + chart_right) / 2
-        return chart_left + index * (chart_right - chart_left) / (len(points) - 1)
+            return (first_x + last_x) / 2
+        return first_x + index * (last_x - first_x) / (len(points) - 1)
 
-    def py(value: int) -> float:
-        return chart_top + (y_max - value) * (chart_bottom - chart_top) / (y_max - y_min)
+    def y_at(value: int) -> float:
+        return plot_top + (y_tick_max - value) * (plot_bottom - plot_top) / (y_tick_max - y_tick_min)
 
-    tick_start = ((y_min + 4) // 5) * 5
-    for tick in range(tick_start, y_max + 1, 5):
-        y = round(py(tick))
-        draw.line((chart_left, y, chart_right, y), fill=GRID, width=3)
-        draw.text((82, y - 27), f"M{tick}", font=font(36), fill="#696458")
+    # Axis labels and dotted one-unit grid match the approved sample.
+    draw.text((96, 268), "マジック", font=face(34), fill=BLACK)
+    for tick in range(y_tick_min, y_tick_max + 1):
+        y = round(y_at(tick))
+        for dash_left in range(chart_left, chart_right, 18):
+            draw.line((dash_left, y, min(dash_left + 10, chart_right), y), fill=GRID, width=2)
+        centered(draw, 184, y, str(tick), face(29, bold=False), BLACK)
+    draw.line((chart_left, chart_top, chart_left, chart_bottom), fill=BLACK, width=4)
+    draw.line((chart_left, chart_bottom, chart_right, chart_bottom), fill=BLACK, width=4)
 
-    draw.line((chart_left, chart_bottom, chart_right, chart_bottom), fill="#877F6C", width=4)
+    # Yellow step line begins at the lighting date; no segment is drawn to its left.
+    step: list[tuple[float, float]] = [(x_at(0), y_at(values[0]))]
+    for index in range(1, len(points)):
+        x = x_at(index)
+        step.extend(((x, y_at(values[index - 1])), (x, y_at(values[index]))))
+    draw.line(step, fill=HAWKS_YELLOW, width=8)
 
-    line_points: list[tuple[float, float]] = []
-    for index, magic in enumerate(magic_values):
-        x, y = px(index), py(magic)
-        if index == 0:
-            line_points.append((x, y))
-        else:
-            previous_y = py(magic_values[index - 1])
-            line_points.extend(((x, previous_y), (x, y)))
-    if len(line_points) > 1:
-        draw.line(line_points, fill=INK, width=12)
-
+    number_font = face(31)
+    date_font = face(29, bold=False)
     for index, point in enumerate(points):
-        x, y = px(index), py(point["magic"])
-        draw.ellipse((x - 17, y - 17, x + 17, y + 17), fill=HAWKS_YELLOW, outline=INK, width=5)
-        if index > 0 and point["magic"] < points[index - 1]["magic"]:
-            label_x = x - 54 if index == len(points) - 1 else x + 54
-            label_y = y - 32
-        else:
-            label_x = x
-            label_y = y - 62
-        centered_text(draw, (round(label_x), round(label_y)), f"M{point['magic']}", font(35), INK)
+        x, y = x_at(index), y_at(point["magic"])
+        draw.ellipse((x - 10, y - 10, x + 10, y + 10), fill=BLACK)
+        centered(draw, x, y - 42, str(point["magic"]), number_font, BLACK)
 
         opponent = point.get("opponent")
         if opponent:
-            badge_top = min(round(y + 76), chart_bottom - 106)
+            badge_path = ASSET_DIR / f"{opponent}.png"
+            badge_half = 44
             paste_contained(
                 canvas,
-                ASSET_DIR / f"{opponent}.png",
-                (round(x - 46), badge_top, round(x + 46), badge_top + 92),
+                badge_path,
+                (
+                    round(x - badge_half),
+                    round(y + 68 - badge_half),
+                    round(x + badge_half),
+                    round(y + 68 + badge_half),
+                ),
             )
 
-        date_label = f"{dates[index].month}/{dates[index].day}"
-        centered_text(draw, (round(x), 1368), date_label, font(34), "#4B4B4B")
+        centered(draw, x, 1465, f"{dates[index].month}/{dates[index].day}", date_font, BLACK)
 
-    footer = payload.get("footer", "試合なしの日は直前のマジックを持ち越し。対戦相手ロゴは試合日のみ表示。")
-    draw.text((185, 1470), footer, font=font(31), fill="#6C665A")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    canvas.convert("RGB").save(output, format="PNG", optimize=True)
+    centered(draw, (chart_left + chart_right) / 2, 1520, "日付", face(35, bold=False), BLACK)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    canvas.convert("RGB").save(output_path, format="PNG", optimize=True)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("input", type=Path, help="input JSON")
-    parser.add_argument("output", type=Path, help="output PNG")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("input", type=Path)
+    parser.add_argument("output", type=Path)
     args = parser.parse_args()
     render(load_input(args.input), args.output)
 
 
 if __name__ == "__main__":
     main()
+

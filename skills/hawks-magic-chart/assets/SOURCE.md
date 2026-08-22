@@ -1,22 +1,19 @@
 # Logo asset sources
 
-The original ChatGPT conversation fixed the visual rule of reusing PNG logo assets instead of drawing logo-like letters with fonts. The prior attachment bytes were not exposed by the referenced-task API, so the files in this repository were reconstructed from vector insignia sources on Wikimedia Commons and normalized into the confirmed fixed-asset layout.
+The fixed assets in this directory implement the visual design approved from the finished 2880×1620 sample supplied by the user on 2026-08-23.
 
-Sources retrieved on 2026-08-23:
+Sources and normalization:
 
-- `hawks_sh.png`: [Fukuoka SoftBank Hawks insignia.svg](https://commons.wikimedia.org/wiki/File:Fukuoka_SoftBank_Hawks_insignia.svg)
-- `F.png`: [Hokkaido Nippon-Ham Fighters insignia.svg](https://commons.wikimedia.org/wiki/File:Hokkaido_Nippon-Ham_Fighters_insignia.svg)
-- `L.png`: [Seibu lions insignia.svg](https://commons.wikimedia.org/wiki/File:Seibu_lions_insignia.svg)
-- `M.png`: [Chiba Lotte Marines insignia.svg](https://commons.wikimedia.org/wiki/File:Chiba_Lotte_Marines_insignia.svg)
-- `E.png`: [Rakuten eagles insignia.svg](https://commons.wikimedia.org/wiki/File:Rakuten_eagles_insignia.svg)
-- `B.png`: [Orix Buffaloes insignia.svg](https://commons.wikimedia.org/wiki/File:Orix_Buffaloes_insignia.svg)
+- `hawks_sh.png`: reconstructed from [Fukuoka SoftBank Hawks insignia.svg](https://commons.wikimedia.org/wiki/File:Fukuoka_SoftBank_Hawks_insignia.svg) and kept on a transparent 256×256 canvas.
+- `F.png`, `L.png`, `M.png`, and `E.png`: recovered from the user-supplied approved finished sample so the badge shapes, colors, and proportions match that sample.
+- `B.png`: the gold monogram originated from [Orix Buffaloes insignia.svg](https://commons.wikimedia.org/wiki/File:Orix_Buffaloes_insignia.svg). It is normalized as a solid Buffaloes navy circle at the same visible diameter as F/L/M/E, with the reduced gold B geometrically centered inside it.
 
-Processing applied here:
+Fixed rendering rules:
 
-- crop transparent outer padding;
-- preserve the vector-rendered logo shapes;
-- normalize opponent assets to a 256×256 transparent canvas and equal-size circular frame;
-- apply the confirmed optical correction toward upper-right for M and E;\n- normalize `B.png` as a solid Buffaloes navy circle at the same visible diameter as F/L/M/E, with a reduced original gold B monogram geometrically centered inside it;
-- keep the Hawks SH mark on a transparent 256×256 canvas for title placement.
+- preserve the approved circle colors and monograms;
+- keep F/L/M/E/B at the same visible circle diameter;
+- keep each monogram contained within its circle;
+- do not redraw a badge with text or a substitute font;
+- reuse these PNG files unchanged unless the user explicitly approves an asset revision.
 
 The marks may be protected trademarks even where a source page describes a simple text logo as public domain. Keep this repository private and confirm the relevant trademark and usage rules before commercial redistribution.
