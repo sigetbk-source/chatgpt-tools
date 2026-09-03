@@ -13,7 +13,7 @@ from event_icons import make_event_icon  # noqa: E402
 def main() -> None:
     output = ROOT / "assets"
     output.mkdir(parents=True, exist_ok=True)
-    for kind in ("lit", "extinguished", "relit"):
+    for kind in ("lit", "extinguished", "relit", "champion"):
         make_event_icon(kind).save(output / f"magic_{kind}.png")
 
 

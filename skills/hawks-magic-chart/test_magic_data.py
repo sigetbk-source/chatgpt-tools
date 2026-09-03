@@ -23,6 +23,25 @@ class MagicDataTests(unittest.TestCase):
         self.load(points)
         self.assertEqual(derive_events(points), {0: "lit", 1: "extinguished", 2: "relit"})
 
+    def test_m0_is_champion_event(self):
+        points = [
+            {"date": "2026-08-05", "magic": 2, "opponent": "F"},
+            {"date": "2026-08-06", "magic": 1, "opponent": None},
+            {"date": "2026-08-07", "magic": 0, "opponent": "L"},
+            {"date": "2026-08-08", "magic": 0, "opponent": None},
+        ]
+        self.load(points)
+        self.assertEqual(derive_events(points), {0: "lit", 2: "champion"})
+
+    def test_m0_after_extinction_is_champion_not_relight(self):
+        points = [
+            {"date": "2026-08-05", "magic": 2, "opponent": "F"},
+            {"date": "2026-08-06", "magic": None, "opponent": "F"},
+            {"date": "2026-08-07", "magic": 0, "opponent": None},
+        ]
+        self.load(points)
+        self.assertEqual(derive_events(points), {0: "lit", 1: "extinguished", 2: "champion"})
+
     def test_relight_must_be_lower_than_pre_extinction_value(self):
         with self.assertRaisesRegex(ValueError, "relit magic must be lower"):
             self.load([

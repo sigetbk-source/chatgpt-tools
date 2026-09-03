@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 
-MagicEvent = Literal["lit", "extinguished", "relit"]
+MagicEvent = Literal["lit", "extinguished", "relit", "champion"]
 
 
 def parse_date(value: str) -> date:
@@ -21,7 +21,10 @@ def derive_events(points: list[dict[str, Any]]) -> dict[int, MagicEvent]:
     previous_magic: int | None = None
     for index, point in enumerate(points):
         magic = point["magic"]
-        if magic is not None and previous_magic is None:
+        if magic == 0 and previous_magic != 0:
+            events[index] = "champion"
+            has_been_lit = True
+        elif magic is not None and previous_magic is None:
             events[index] = "relit" if has_been_lit else "lit"
             has_been_lit = True
         elif magic is None and previous_magic is not None:

@@ -22,6 +22,7 @@ The following state icons are original deterministic drawings generated locally 
 - `magic_lit.png`
 - `magic_extinguished.png`
 - `magic_relit.png`
+- `magic_champion.png`
 
 The renderer loads these fixed PNGs from `assets/` and places them in the same 88px drawing box used for opponent badges. Do not hand-edit generated state PNGs; change `event_icons.py`, run the generator, and verify the rendered chart instead.
 

@@ -20,7 +20,12 @@ GRID = "#D8D8D8"
 MUTED = "#707070"
 BADGE_SIZE = 88
 ASSET_DIR = Path(__file__).resolve().parent / "assets"
-EVENT_LABELS = {"lit": "点灯", "extinguished": "消滅", "relit": "再点灯"}
+EVENT_LABELS = {
+    "lit": "点灯",
+    "extinguished": "消滅",
+    "relit": "再点灯",
+    "champion": "優勝決定",
+}
 
 
 def _font_path() -> Path:
