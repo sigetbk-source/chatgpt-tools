@@ -4,12 +4,12 @@
 from __future__ import annotations
 
 import argparse
-import json
-from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
+
+from magic_data import derive_events, display_magic_values, load_input, parse_date
 
 
 WIDTH, HEIGHT = 2880, 1620
@@ -17,7 +17,10 @@ WHITE = "#FFFFFF"
 BLACK = "#111111"
 HAWKS_YELLOW = "#F7B900"
 GRID = "#D8D8D8"
+MUTED = "#707070"
+BADGE_SIZE = 88
 ASSET_DIR = Path(__file__).resolve().parent / "assets"
+EVENT_LABELS = {"lit": "点灯", "extinguished": "消滅", "relit": "再点灯"}
 
 
 def _font_path() -> Path:
@@ -40,43 +43,6 @@ def face(size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
     return ImageFont.truetype(str(path), size=size)
 
 
-def parse_date(value: str) -> date:
-    return datetime.strptime(value, "%Y-%m-%d").date()
-
-
-def load_input(path: Path) -> dict[str, Any]:
-    with path.open(encoding="utf-8") as handle:
-        payload = json.load(handle)
-    points = payload.get("data")
-    if not isinstance(points, list) or not points:
-        raise ValueError("input must contain a non-empty data array")
-
-    previous_date: date | None = None
-    previous_magic: int | None = None
-    supported = {"F", "L", "M", "E", "B", None}
-    for index, point in enumerate(points):
-        if not isinstance(point, dict):
-            raise ValueError(f"data[{index}] must be an object")
-        point_date = parse_date(point["date"])
-        magic = point["magic"]
-        opponent = point.get("opponent")
-        if not isinstance(magic, int) or isinstance(magic, bool) or magic < 0:
-            raise ValueError(f"data[{index}].magic must be a non-negative integer")
-        if opponent not in supported:
-            raise ValueError(f"data[{index}].opponent is unsupported: {opponent!r}")
-        if previous_date is not None and point_date <= previous_date:
-            raise ValueError("dates must be strictly increasing")
-        if previous_date is not None and point_date != previous_date + timedelta(days=1):
-            raise ValueError("data must include every calendar date without gaps")
-        if previous_magic is not None and magic > previous_magic:
-            raise ValueError("pennant magic must never increase")
-        if opponent is None and previous_magic is not None and magic != previous_magic:
-            raise ValueError("a no-game date must carry the previous magic number forward")
-        previous_date = point_date
-        previous_magic = magic
-    return payload
-
-
 def paste_contained(canvas: Image.Image, path: Path, box: tuple[int, int, int, int]) -> None:
     asset = Image.open(path).convert("RGBA")
     left, top, right, bottom = box
@@ -90,6 +56,14 @@ def paste_contained(canvas: Image.Image, path: Path, box: tuple[int, int, int, i
     canvas.alpha_composite(asset, (x, y))
 
 
+def paste_event_icon(canvas: Image.Image, kind: str, x: int, y: int) -> None:
+    paste_contained(
+        canvas,
+        ASSET_DIR / f"magic_{kind}.png",
+        (x, y, x + BADGE_SIZE, y + BADGE_SIZE),
+    )
+
+
 def centered(draw: ImageDraw.ImageDraw, x: float, y: float, text: str, font: ImageFont.FreeTypeFont, fill: str) -> None:
     bounds = draw.textbbox((0, 0), text, font=font)
     width = bounds[2] - bounds[0]
@@ -97,24 +71,36 @@ def centered(draw: ImageDraw.ImageDraw, x: float, y: float, text: str, font: Ima
     draw.text((x - width / 2, y - height / 2 - bounds[1]), text, font=font, fill=fill)
 
 
+def summary_text(points: list[dict[str, Any]]) -> str:
+    dates = [parse_date(item["date"]) for item in points]
+    first_magic = next(item["magic"] for item in points if item["magic"] is not None)
+    final_magic = points[-1]["magic"]
+    final = "消滅中" if final_magic is None else f"M{final_magic}"
+    return (
+        f"{dates[0].year}/{dates[0].month}/{dates[0].day} M{first_magic}点灯"
+        f"  →  {dates[-1].month}/{dates[-1].day} {final}"
+    )
+
+
 def render(payload: dict[str, Any], output_path: Path) -> None:
     points = payload["data"]
     dates = [parse_date(item["date"]) for item in points]
-    values = [item["magic"] for item in points]
+    numeric_values = [item["magic"] for item in points if item["magic"] is not None]
+    display_values = display_magic_values(points)
+    events = derive_events(points)
 
     canvas = Image.new("RGBA", (WIDTH, HEIGHT), WHITE)
     draw = ImageDraw.Draw(canvas)
 
-    # Header: approved SH placement, bold title, and black/yellow double rule.
+    # Preserve the approved header, title typography, and double rule.
     paste_contained(canvas, ASSET_DIR / "hawks_sh.png", (72, 20, 270, 210))
-    draw.text((320, 58), "’26 福岡ソフトバンクホークス 優勝マジック推移", font=face(72), fill=BLACK)
+    short_year = str(dates[0].year)[-2:]
+    title = payload.get("title", f"’{short_year} 福岡ソフトバンクホークス 優勝マジック推移")
+    draw.text((320, 58), title, font=face(72), fill=BLACK)
     draw.rectangle((320, 165, 2710, 174), fill=BLACK)
     draw.rectangle((320, 183, 2710, 190), fill=HAWKS_YELLOW)
 
-    summary = (
-        f"{dates[0].year}/{dates[0].month}/{dates[0].day} M{values[0]}点灯"
-        f"  →  {dates[-1].month}/{dates[-1].day} M{values[-1]}"
-    )
+    summary = summary_text(points)
     summary_font = face(46)
     summary_bounds = draw.textbbox((0, 0), summary, font=summary_font)
     summary_width = summary_bounds[2] - summary_bounds[0]
@@ -125,9 +111,11 @@ def render(payload: dict[str, Any], output_path: Path) -> None:
 
     chart_left, chart_top, chart_right, chart_bottom = 215, 345, 2780, 1425
     first_x, last_x = 290, 2730
-    y_tick_min = max(0, min(values) - 1)
-    y_tick_max = max(values) + 1
-    plot_top = 350
+    y_tick_min = max(0, min(numeric_values) - 1)
+    y_tick_max = max(numeric_values) + 1
+    # Fifty pixels of extra headroom is the only geometry adjustment. It keeps
+    # the initial state icon above the first value without touching the pill.
+    plot_top = 400
     plot_bottom = 1352
 
     def x_at(index: int) -> float:
@@ -138,7 +126,7 @@ def render(payload: dict[str, Any], output_path: Path) -> None:
     def y_at(value: int) -> float:
         return plot_top + (y_tick_max - value) * (plot_bottom - plot_top) / (y_tick_max - y_tick_min)
 
-    # Axis labels and dotted one-unit grid match the approved sample.
+    # Preserve the approved one-unit dotted grid and plain numeric y-axis.
     draw.text((96, 268), "マジック", font=face(34), fill=BLACK)
     for tick in range(y_tick_min, y_tick_max + 1):
         y = round(y_at(tick))
@@ -148,27 +136,49 @@ def render(payload: dict[str, Any], output_path: Path) -> None:
     draw.line((chart_left, chart_top, chart_left, chart_bottom), fill=BLACK, width=4)
     draw.line((chart_left, chart_bottom, chart_right, chart_bottom), fill=BLACK, width=4)
 
-    # Yellow step line begins at the lighting date; no segment is drawn to its left.
-    step: list[tuple[float, float]] = [(x_at(0), y_at(values[0]))]
-    for index in range(1, len(points)):
-        x = x_at(index)
-        step.extend(((x, y_at(values[index - 1])), (x, y_at(values[index]))))
-    draw.line(step, fill=HAWKS_YELLOW, width=8)
+    # Draw each active interval as an independent approved yellow step line.
+    segment: list[tuple[float, float]] = []
+    previous_magic: int | None = None
+    for index, point in enumerate(points):
+        magic = point["magic"]
+        if magic is None:
+            if len(segment) > 1:
+                draw.line(segment, fill=HAWKS_YELLOW, width=8)
+            segment = []
+            previous_magic = None
+            continue
+        x, y = x_at(index), y_at(magic)
+        if previous_magic is None:
+            segment = [(x, y)]
+        else:
+            segment.extend(((x, y_at(previous_magic)), (x, y)))
+        previous_magic = magic
+    if len(segment) > 1:
+        draw.line(segment, fill=HAWKS_YELLOW, width=8)
 
     number_font = face(31)
     date_font = face(29, bold=False)
+    event_number_y: dict[int, float] = {}
     for index, point in enumerate(points):
-        x, y = x_at(index), y_at(point["magic"])
-        draw.ellipse((x - 10, y - 10, x + 10, y + 10), fill=BLACK)
-        centered(draw, x, y - 42, str(point["magic"]), number_font, BLACK)
+        x = x_at(index)
+        magic = point["magic"]
+        display_magic = display_values[index]
+        y = y_at(display_magic)
+
+        if magic is not None:
+            draw.ellipse((x - 10, y - 10, x + 10, y + 10), fill=BLACK)
+            centered(draw, x, y - 42, str(magic), number_font, BLACK)
+            event_number_y[index] = y - 42
+        elif events.get(index) == "extinguished":
+            centered(draw, x, y - 42, str(display_magic), number_font, MUTED)
+            event_number_y[index] = y - 42
 
         opponent = point.get("opponent")
         if opponent:
-            badge_path = ASSET_DIR / f"{opponent}.png"
-            badge_half = 44
+            badge_half = BADGE_SIZE // 2
             paste_contained(
                 canvas,
-                badge_path,
+                ASSET_DIR / f"{opponent}.png",
                 (
                     round(x - badge_half),
                     round(y + 68 - badge_half),
@@ -179,19 +189,30 @@ def render(payload: dict[str, Any], output_path: Path) -> None:
 
         centered(draw, x, 1465, f"{dates[index].month}/{dates[index].day}", date_font, BLACK)
 
+    # State icons use the same 88px drawing box as the original opponent badges.
+    for index, event in events.items():
+        x = round(x_at(index))
+        number_y = event_number_y[index]
+        icon_left = x - BADGE_SIZE // 2
+        icon_top = round(number_y - BADGE_SIZE - 14)
+        paste_event_icon(canvas, event, icon_left, icon_top)
+        draw.text((icon_left + BADGE_SIZE + 8, icon_top + 27), EVENT_LABELS[event], font=face(25), fill=BLACK)
+
     centered(draw, (chart_left + chart_right) / 2, 1520, "日付", face(35, bold=False), BLACK)
+    if payload.get("simulation") is True:
+        centered(draw, WIDTH / 2, 1570, "※ 動作確認用ダミー（実績値ではありません）", face(27), "#982747")
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     canvas.convert("RGB").save(output_path, format="PNG", optimize=True)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("input", type=Path)
-    parser.add_argument("output", type=Path)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("input", type=Path, help="input JSON")
+    parser.add_argument("output", type=Path, help="output PNG")
     args = parser.parse_args()
     render(load_input(args.input), args.output)
 
 
 if __name__ == "__main__":
     main()
-
