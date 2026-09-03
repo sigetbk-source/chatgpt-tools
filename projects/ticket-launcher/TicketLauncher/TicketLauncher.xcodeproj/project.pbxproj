@@ -138,9 +138,10 @@
 				};
 			};
 			buildConfigurationList = 70295027302F5AD400D19185 /* Build configuration list for PBXProject "TicketLauncher" */;
-			developmentRegion = en;
+			developmentRegion = ja;
 			hasScannedForEncodings = 0;
 			knownRegions = (
+				ja,
 				en,
 				Base,
 			);

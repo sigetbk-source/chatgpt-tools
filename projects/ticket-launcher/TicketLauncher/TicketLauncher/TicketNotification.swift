@@ -1,20 +1,26 @@
 import Foundation
 
 enum TicketNotificationTiming: String, CaseIterable, Sendable {
+    case tenMinutes = "ten-minutes"
     case fiveMinutes = "five-minutes"
     case threeMinutes = "three-minutes"
+    case oneMinute = "one-minute"
 
     var offset: TimeInterval {
         switch self {
+        case .tenMinutes: -600
         case .fiveMinutes: -300
         case .threeMinutes: -180
+        case .oneMinute: -60
         }
     }
 
     var titlePrefix: String {
         switch self {
+        case .tenMinutes: "発売10分前"
         case .fiveMinutes: "まもなく発売"
         case .threeMinutes: "準備開始"
+        case .oneMinute: "まもなく開始"
         }
     }
 }
@@ -50,7 +56,6 @@ struct TicketNotificationPlan: Equatable, Sendable {
 
     static func removableIdentifiers(eventID: UUID) -> [String] {
         identifiers(eventID: eventID) + [
-            "ticket.\(eventID.uuidString).one-minute",
             "ticket.\(eventID.uuidString).sale-time"
         ]
     }

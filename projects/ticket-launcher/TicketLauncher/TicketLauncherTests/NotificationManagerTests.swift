@@ -41,18 +41,18 @@ final class NotificationManagerTests: XCTestCase {
         XCTAssertEqual(manager.authorizationState, .authorized)
     }
 
-    func testScheduleAddsTwoRequestsAndRescheduleReplacesContent() async throws {
+    func testScheduleAddsFourRequestsAndRescheduleReplacesContent() async throws {
         let center = FakeNotificationCenter(status: .authorized)
         let manager = NotificationManager(center: center)
         var event = makeEvent(name: "変更前")
 
         let firstCount = try await manager.scheduleNotifications(for: event, now: now)
-        XCTAssertEqual(firstCount, 2)
+        XCTAssertEqual(firstCount, 4)
         event.name = "変更後"
         let secondCount = try await manager.scheduleNotifications(for: event, now: now)
-        XCTAssertEqual(secondCount, 2)
+        XCTAssertEqual(secondCount, 4)
 
-        XCTAssertEqual(center.requests.count, 2)
+        XCTAssertEqual(center.requests.count, 4)
         XCTAssertTrue(center.requests.values.allSatisfy { $0.content.title.contains("変更後") })
         XCTAssertTrue(center.requests.values.allSatisfy {
             $0.content.body == "タップして発売待機を開始"
@@ -94,13 +94,13 @@ final class NotificationManagerTests: XCTestCase {
         let failureCount = await manager.reconcileNotifications(for: [active], now: now)
 
         XCTAssertEqual(failureCount, 0)
-        XCTAssertEqual(center.requests.count, 2)
+        XCTAssertEqual(center.requests.count, 4)
         XCTAssertTrue(center.requests.values.allSatisfy {
             NotificationManager.eventID(from: $0.content.userInfo) == active.id
         })
     }
 
-    func testReconcileRemovesLegacyOneMinuteAndSaleTimeRequests() async {
+    func testReconcileReplacesStaleRequestsAndRemovesLegacySaleTimeRequest() async {
         let center = FakeNotificationCenter(status: .authorized)
         let event = makeEvent()
         center.insertLegacyRequests(for: event)
@@ -139,12 +139,15 @@ final class NotificationManagerTests: XCTestCase {
 
         let failureCount = await manager.reconcileNotifications(
             for: [event],
-            now: now.addingTimeInterval(421)
+            now: now.addingTimeInterval(601)
         )
 
         XCTAssertEqual(failureCount, 0)
-        XCTAssertEqual(center.addCallCount, 2)
-        XCTAssertTrue(center.requests.isEmpty)
+        XCTAssertEqual(center.addCallCount, 4)
+        XCTAssertEqual(
+            Set(center.requests.keys),
+            Set(identifiers.suffix(2))
+        )
     }
 
     func testDeleteWhileReconcileIsSuspendedDoesNotRestoreNotifications() async {
@@ -189,7 +192,7 @@ final class NotificationManagerTests: XCTestCase {
         center.resumePendingRequestRead()
         _ = await reconcileTask.value
 
-        XCTAssertEqual(center.requests.count, 2)
+        XCTAssertEqual(center.requests.count, 4)
         XCTAssertTrue(center.requests.values.allSatisfy { $0.content.title.contains("変更後") })
     }
 
@@ -211,7 +214,7 @@ final class NotificationManagerTests: XCTestCase {
         center.resumePendingRequestRead()
         _ = await reconcileTask.value
 
-        XCTAssertEqual(center.requests.count, 2)
+        XCTAssertEqual(center.requests.count, 4)
     }
 
     func testOlderReconcileCannotOverwriteAlreadyScheduledNewerState() async throws {
@@ -300,7 +303,7 @@ final class NotificationManagerTests: XCTestCase {
         TicketEvent(
             id: id,
             name: name,
-            saleDate: now.addingTimeInterval(600),
+            saleDate: now.addingTimeInterval(900),
             saleURL: URL(string: "https://example.com/tickets")!
         )
     }

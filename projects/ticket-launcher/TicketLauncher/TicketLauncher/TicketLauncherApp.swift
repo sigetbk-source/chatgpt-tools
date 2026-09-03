@@ -13,6 +13,7 @@ struct TicketLauncherApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView(store: store, notifications: notifications)
+                .environment(\.locale, Locale(identifier: "ja_JP"))
         }
     }
 }

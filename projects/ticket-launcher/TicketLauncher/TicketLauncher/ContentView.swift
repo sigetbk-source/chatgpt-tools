@@ -268,7 +268,11 @@ private struct EventEditorView: View {
         self.event = event
         self.onSave = onSave
         _name = State(initialValue: event?.name ?? "")
-        _saleDate = State(initialValue: event?.saleDate ?? Date().addingTimeInterval(3_600))
+        _saleDate = State(
+            initialValue: TicketDateSelection.initialEditorDate(
+                existingDate: event?.saleDate
+            )
+        )
         _saleURLText = State(initialValue: event?.saleURL.absoluteString ?? "")
         _memo = State(initialValue: event?.memo ?? "")
     }
@@ -279,7 +283,10 @@ private struct EventEditorView: View {
                 Section("チケット情報") {
                     TextField("イベント名", text: $name)
                         .textInputAutocapitalization(.never)
-                    DatePicker("発売日時", selection: $saleDate)
+                    LabeledContent("発売日時") {
+                        FiveMinuteDatePicker(selection: $saleDate)
+                            .accessibilityLabel("発売日時")
+                    }
                     TextField("販売URL（https://）", text: $saleURLText)
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)

@@ -5,28 +5,39 @@ import XCTest
 final class TicketNotificationTests: XCTestCase {
     private let saleDate = Date(timeIntervalSince1970: 1_800_001_000)
 
-    func testBothNotificationsArePlannedWhenRegisteredEarly() {
+    func testAllNotificationsArePlannedWhenRegisteredEarly() {
         let event = makeEvent()
 
         let plans = TicketNotificationPlan.pendingPlans(
             for: event,
-            now: saleDate.addingTimeInterval(-600)
+            now: saleDate.addingTimeInterval(-900)
         )
 
         XCTAssertEqual(plans.map(\.timing), TicketNotificationTiming.allCases)
         XCTAssertEqual(
             plans.map(\.fireDate),
             [
+                saleDate.addingTimeInterval(-600),
                 saleDate.addingTimeInterval(-300),
-                saleDate.addingTimeInterval(-180)
+                saleDate.addingTimeInterval(-180),
+                saleDate.addingTimeInterval(-60)
             ]
         )
     }
 
-    func testNoNotificationIsPlannedAfterThreeMinuteWindow() {
+    func testOnlyOneMinuteNotificationIsPlannedAfterThreeMinuteWindow() {
         let plans = TicketNotificationPlan.pendingPlans(
             for: makeEvent(),
             now: saleDate.addingTimeInterval(-120)
+        )
+
+        XCTAssertEqual(plans.map(\.timing), [.oneMinute])
+    }
+
+    func testNoNotificationIsPlannedAfterOneMinuteWindow() {
+        let plans = TicketNotificationPlan.pendingPlans(
+            for: makeEvent(),
+            now: saleDate.addingTimeInterval(-30)
         )
 
         XCTAssertTrue(plans.isEmpty)
@@ -41,21 +52,23 @@ final class TicketNotificationTests: XCTestCase {
     func testIdentifiersAreUniqueForEveryTiming() {
         let identifiers = TicketNotificationPlan.identifiers(eventID: makeEvent().id)
 
-        XCTAssertEqual(identifiers.count, 2)
-        XCTAssertEqual(Set(identifiers).count, 2)
+        XCTAssertEqual(identifiers.count, 4)
+        XCTAssertEqual(Set(identifiers).count, 4)
     }
 
     func testTitlesMatchSpecification() {
         let titles = TicketNotificationPlan.pendingPlans(
             for: makeEvent(),
-            now: saleDate.addingTimeInterval(-600)
+            now: saleDate.addingTimeInterval(-900)
         ).map(\.title)
 
         XCTAssertEqual(
             titles,
             [
+                "発売10分前：ライブ",
                 "まもなく発売：ライブ",
-                "準備開始：ライブ"
+                "準備開始：ライブ",
+                "まもなく開始：ライブ"
             ]
         )
     }

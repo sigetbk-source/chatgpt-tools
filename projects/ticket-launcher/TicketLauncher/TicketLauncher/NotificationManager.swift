@@ -303,7 +303,9 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         guard let eventID = Self.eventID(from: response.notification.request.content.userInfo) else {
-            DispatchQueue.main.async(execute: completionHandler)
+            DispatchQueue.main.async {
+                completionHandler()
+            }
             return
         }
         deliverNotificationEventID(eventID, completion: completionHandler)
