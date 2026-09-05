@@ -29,9 +29,9 @@
 - `explorer_lite`: `gpt-5.6-luna` / low。読み取り中心の探索、列挙、定型チェック。
 - `worker`: `gpt-5.6-terra` / medium。仕様が明確な通常実装と限定テスト。
 - `reviewer`: `gpt-5.6` / high。正確性、回帰、セキュリティ、難しいレビュー。
-- `browser_operator`: 親モデルと推論量を継承。Browser / Computer Use のように親側で強いモデルを選ぶ価値が高い作業。
+- `browser_operator`: モデルと推論量を固定しない。Browser / Computer Use では親セッションで選んだモデルを継承し、Astra など UI 操作に強いモデルを必要なときだけ使えるようにする。
 
-`.codex/config.toml` では通常のサブエージェント既定値を `gpt-5.6-terra` / medium とし、同時スレッド数を 4 に抑える。高価なモデルは、難しい判断や UI 操作など効果が出やすい工程へ集中させる。
+`.codex/config.toml` はサブエージェントを有効にし、同時スレッド数を 4 に抑える。モデルの全体既定値は固定せず、役割別 TOML で安価なモデルを明示する。これにより `browser_operator` や未指定の役割は親モデルを継承でき、高価なモデルを難しい判断や UI 操作など効果が出やすい工程へ集中させられる。
 
 ### Claude
 
