@@ -27,7 +27,7 @@ Premiere Pro の内蔵文字起こし・話者分離を入力の正本にせず�
 - Word alignment: 現行の単語 TC 精度を確認し、不足する場合に追加する
 - Speaker diarization: pyannote 系を第一候補として検証する
 - 正本: Premiere JSON ではなく独自 master JSON
-- Premiere 連携: 最初は手動 JSON Import、検証後に UXP 自動適用へ進む
+- Premiere 連携: Phase 1は公式UXP経由でImportを実機確認。手動UI Importと汎用UXP自動適用は未検証・未実装
 - 元素材: 書き換えない
 - `.prmi` / `.prin`: 本プロジェクトのMVPでは依存しない。別テーマとして read-only 解析・活用を検討する
 
@@ -40,12 +40,21 @@ Premiere Pro の内蔵文字起こし・話者分離を入力の正本にせず�
 ## 文書
 
 - [REQUIREMENTS.md](REQUIREMENTS.md): 要件定義の正本
-- `docs/architecture.md`: 処理構成・データフロー（今後作成）
-- `docs/premiere-json.md`: Premiere Transcript JSON の仕様・実機検証記録（今後作成）
+- [docs/architecture.md](docs/architecture.md): 既存処理の再利用調査
+- [docs/premiere-json.md](docs/premiere-json.md): 最小変換の使用法・実機検証記録
+
+## 開発・検証環境
+
+ユーザー指定により Premiere Pro 2025（25系）を使用する。2026-09-07にMacのインストール情報から25.6.6を確認。2026での結果を25系の検証結果として扱わない。
+
+最小変換は `python/premiere_export.py`。使用法と未検証項目は上記文書を参照。
 
 ## 状態
 
-- 要件定義: v0.1 作成中
-- 独自 master JSON → Premiere JSON の最小変換: プロトタイプ作成済み、Premiere 実機確認は未実施
-- 独自 ASR / 話者分離パイプライン: 未実装
-- UXP 自動適用: 未実装
+- 要件定義: v0.1
+- Phase 1: 25.6.6の1素材で独自JSONのImport・仮2話者表示・検索・位置ジャンプ・Text-Based Editing削除/カット＆ペーストを実機確認（2026-09-07）
+- 最小変換: `python/premiere_export.py`、自動テスト4件成功
+- ASR: 一時環境のMLX Whisperで45秒音声から118単語を生成。既存環境の復旧・汎用ASR adapterは未完了
+- 話者分離: 手動の仮割当で表示を試験。自動話者分離・話者割当精度は未検証
+- UXP: 対象固定・権限最小の試験用呼び出しで読み込み/読み戻し成功。汎用自動適用は未実装
+- 詳細・制約: [検証記録](docs/premiere-json.md)。MVP全体の完了ではない
