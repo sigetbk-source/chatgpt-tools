@@ -39,6 +39,8 @@ Premiere Pro の内蔵文字起こし・話者分離を入力の正本にせず�
 
 ## 文書
 
+- [docs/master-review.md](docs/master-review.md): 独立master用の話者・区間修正画面の起動と操作
+
 - [docs/integration.md](docs/integration.md): 非依存master修正・UUID維持・安全な書き戻しの共通経路と統合状況
 
 - [REQUIREMENTS.md](REQUIREMENTS.md): 要件定義の正本
@@ -53,6 +55,8 @@ Premiere Pro の内蔵文字起こし・話者分離を入力の正本にせず�
 最小変換は `python/premiere_export.py`。使用法と未検証項目は上記文書を参照。
 
 ## 状態
+
+- 修正画面: 既存画面の構成・スタイルを再利用した独立master用入口を追加。話者割当・単語境界分割・結合・Undo/Redo・作業データ保存・UUID維持のPremiere用書き出しを提供。本文編集・画面からの直接書き戻しは未実装。
 
 - 統合: 外部ASR由来master → master側話者修正 → UUIDを維持して変換 → 共通writebackを45秒検証コピーで実機確認。ASR再実行・修正UI統合・自動話者分離は今回未実施。
 
