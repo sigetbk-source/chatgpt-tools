@@ -22,7 +22,7 @@ def nonempty(value, label):
     return value
 
 
-def convert(master):
+def convert(master, speaker_ids=None):
     if master.get('schema') != 'bk-master-transcript/v0.1':
         raise ValueError('unsupported master schema')
     nonempty(master.get('source_id'), 'source_id')
@@ -35,11 +35,21 @@ def convert(master):
         raise ValueError('speakers and utterances must be nonempty arrays')
     ids = {}
     output_speakers = []
+    if speaker_ids is not None:
+        if not isinstance(speaker_ids, dict) or set(speaker_ids) != {s.get('key') for s in speakers}:
+            raise ValueError('speaker_ids must cover exactly the master speaker keys')
+        try:
+            normalized = [str(uuid.UUID(value)) for value in speaker_ids.values()]
+        except (ValueError, TypeError, AttributeError):
+            raise ValueError('speaker_ids must contain valid UUIDs') from None
+        if len(set(normalized)) != len(normalized):
+            raise ValueError('speaker_ids must be unique')
+        speaker_ids = dict(zip(speaker_ids, normalized))
     for speaker in speakers:
         key = nonempty(speaker.get('key'), 'speaker key')
         if key in ids:
             raise ValueError('duplicate speaker key')
-        ids[key] = str(uuid.uuid4())
+        ids[key] = speaker_ids[key] if speaker_ids is not None else str(uuid.uuid4())
         output_speakers.append({'id': ids[key], 'name': nonempty(speaker.get('name'), 'speaker name')})
     segments = []
     previous_start = -1
@@ -88,8 +98,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('master', type=Path)
     parser.add_argument('output', type=Path)
+    parser.add_argument('--speaker-ids', type=Path, help='Explicit master speaker key to Premiere UUID mapping')
     args = parser.parse_args()
-    result = convert(json.loads(args.master.read_text(encoding='utf-8')))
+    mapping = json.loads(args.speaker_ids.read_text(encoding='utf-8')) if args.speaker_ids else None
+    result = convert(json.loads(args.master.read_text(encoding='utf-8')), mapping)
     # Exclusive creation prevents overwriting a master, media file, or prior result.
     with args.output.open('x', encoding='utf-8') as stream:
         json.dump(result, stream, ensure_ascii=False, indent=2, allow_nan=False)

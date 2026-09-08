@@ -39,6 +39,8 @@ Premiere Pro の内蔵文字起こし・話者分離を入力の正本にせず�
 
 ## 文書
 
+- [docs/integration.md](docs/integration.md): 非依存master修正・UUID維持・安全な書き戻しの共通経路と統合状況
+
 - [REQUIREMENTS.md](REQUIREMENTS.md): 要件定義の正本
 - [docs/architecture.md](docs/architecture.md): 既存処理の再利用調査
 - [docs/premiere-json.md](docs/premiere-json.md): 最小変換の使用法・実機検証記録
@@ -51,6 +53,8 @@ Premiere Pro の内蔵文字起こし・話者分離を入力の正本にせず�
 最小変換は `python/premiere_export.py`。使用法と未検証項目は上記文書を参照。
 
 ## 状態
+
+- 統合: 外部ASR由来master → master側話者修正 → UUIDを維持して変換 → 共通writebackを45秒検証コピーで実機確認。ASR再実行・修正UI統合・自動話者分離は今回未実施。
 
 - 安全性の追加試験: 対象固定の実機試験でプロジェクトパス・素材名・メディアパスの不一致を拒否。模擬保存失敗後のバックアップ再Import・全項目一致・実保存を確認。実I/O障害と製品UIの状態表示は未検証。
 
