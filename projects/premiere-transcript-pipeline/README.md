@@ -42,6 +42,7 @@ Premiere Pro の内蔵文字起こし・話者分離を入力の正本にせず�
 - [REQUIREMENTS.md](REQUIREMENTS.md): 要件定義の正本
 - [docs/architecture.md](docs/architecture.md): 既存処理の再利用調査
 - [docs/premiere-json.md](docs/premiere-json.md): 最小変換の使用法・実機検証記録
+- [docs/speaker-roundtrip.md](docs/speaker-roundtrip.md): 一区間の話者修正・再適用・保存後の確認と再現手順
 
 ## 開発・検証環境
 
@@ -51,7 +52,8 @@ Premiere Pro の内蔵文字起こし・話者分離を入力の正本にせず�
 
 ## 状態
 
-- 要件定義: v0.1
+- 要件定義: v0.2
+- 話者修正: 2026-09-08に一区間の話者変更・反復適用・保存/再オープン・画面表示を確認。境界分割/結合・日英混在適用は未検証
 - Phase 1: 25.6.6の1素材で独自JSONのImport・仮2話者表示・検索・位置ジャンプ・Text-Based Editing削除/カット＆ペーストを実機確認（2026-09-07）
 - 素材メタデータ: 外部生成JSONの読み込み後に「文字起こしステータス」が「完了」となることをユーザーが実機確認（2026-09-08）
 - 最小変換: `python/premiere_export.py`、自動テスト4件成功
