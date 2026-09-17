@@ -56,6 +56,9 @@ Premiere Pro の内蔵文字起こし・話者分離を入力の正本にせず�
 
 ## 状態
 
+- 過分割の比較版: 元ASR区間で代表話者を集計し、手動変更区間を保護する後処理を追加。1166→748区間、手動17区間と全6241語を保持。人物対応・相槌の帰属は要確認。[詳細](docs/diarization-master.md)
+
+
 - 2026-09-17: 既存sherpa-onnx自動話者出力とWhisperを独立masterへ統合するadapterを追加。48分・6241語の文字/時刻保持、修正用保存・再読込、Premiere JSON出力を確認。自動話者精度と今回の実機Importは未検証。[接続仕様・記録](docs/diarization-master.md)
 
 
