@@ -76,6 +76,7 @@ Premiere の `speakers` / `segment.speaker` を入力に使わず、元素材音
 ### 第一候補
 
 - pyannote 系 speaker diarization
+- 2026-09-17: 既存のsegmentation-3.0 ONNX＋ERes2Netをsherpa-onnxで実行した出力を優先再利用。Whisperとのmaster統合仕様は `docs/diarization-master.md`。話者精度の改善は別途評価する。
 
 ### 必須出力
 
@@ -347,6 +348,8 @@ Text-Based Editing
 このテストを通過した時点で Phase 1 完了とする。
 
 ## 16. 変更履歴
+
+- 2026-09-17: 自動話者区間＋Whisperから独立masterへ接続。文字・時刻保持、不明・重複発話の根拠保持、同点の不明扱いを追加。48分素材の既存推論出力で接続を検証。今回の長尺Premiere Import・人物対応精度は未検証。
 
 - 2026-09-08 / 修正画面接続: 既存のカード構成・スタイルを再利用した独立master用画面を追加。話者変更・単語境界分割・結合を共通master編集APIへ接続し、永続履歴・固定UUID出力を実装。本文編集・画面からの直接Premiere反映は残件。使用法は `docs/master-review.md`。
 
