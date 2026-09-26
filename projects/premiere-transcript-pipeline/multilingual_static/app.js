@@ -118,7 +118,7 @@ async function configureWorkflow(){
 async function startWorkflow(){
  if(configuredSignature!==setupSignature()){const ready=await configureWorkflow();if(!ready)return}
  const external=workflowEngine()==='assemblyai';const result=await workflowPost('/api/workflow/start',{confirm_external:external},$('#workflow-progress'));
- if(result){note(external?'AssemblyAIへの音声送信を開始しました。':'Mac内の文字起こしを開始しました。');startWorkflowPolling()}
+ if(result){$('#workflow-progress').textContent='文字起こし・話者分離の完了を待っています。';note(external?'AssemblyAIへの音声送信を開始しました。':'Mac内の文字起こしを開始しました。');startWorkflowPolling()}
 }
 function startWorkflowPolling(){if(workflowPoll)return;workflowPoll=setInterval(async()=>{if(busy||drafts.size)return;try{const revision=project.revision,stage=project.workflow?.stage,job=project.workflow?.job?.status;await load();if(project.revision!==revision||project.workflow?.stage!==stage||project.workflow?.job?.status!==job){render();if(project.workflow?.stage==='error')note(project.workflow.job?.error||project.workflow.status||'文字起こしに失敗しました。',true);if(stage==='transcribing'&&project.workflow?.stage==='review'){$('#workflow-setup').classList.add('compact');updatePanelToggles();note('文字起こしが完了しました。原語と話者を確認してください。')}}}catch(error){$('#workflow-progress').textContent=`状態の取得に失敗しました: ${error.message}`}},2000)}
 function stopWorkflowPolling(){if(workflowPoll){clearInterval(workflowPoll);workflowPoll=null}}

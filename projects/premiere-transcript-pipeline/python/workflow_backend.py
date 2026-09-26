@@ -1,4 +1,5 @@
 """Initial transcription and local reference suggestions for multilingual review."""
+import csv
 import hashlib
 import json
 import os
@@ -35,6 +36,13 @@ def _diarization_python():
     return str(previous) if previous.is_file() else None
 
 
+def _diarization_environment():
+    env = dict(os.environ)
+    # The Whisper cache is separate from the previously authorized HF model cache.
+    env['HF_HOME'] = os.environ.get('PREMIERE_DIARIZATION_HF_HOME', str(Path.home() / '.cache/huggingface'))
+    return env
+
+
 @lru_cache(maxsize=4)
 def _diarization_ready(runtime):
     if not runtime or not Path(runtime).is_file():
@@ -42,7 +50,7 @@ def _diarization_ready(runtime):
     try:
         result = subprocess.run([runtime, '-c',
             "import importlib.util,json; from huggingface_hub import get_token; print(json.dumps({'installed':importlib.util.find_spec('pyannote.audio') is not None,'credential':bool(get_token())}))"],
-            capture_output=True, text=True, timeout=20, check=True)
+            capture_output=True, text=True, timeout=90, check=True, env=_diarization_environment())
         status = json.loads(result.stdout)
         return bool(status['installed']), bool(status['credential'])
     except (OSError, subprocess.SubprocessError, ValueError):
@@ -75,11 +83,14 @@ def _ffmpeg(configured=None):
 
 
 def media_identity(path):
+    initial = Path(path).stat()
     digest = hashlib.sha256()
     with Path(path).open('rb') as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b''):
             digest.update(block)
     stat = Path(path).stat()
+    if (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns) != (initial.st_dev, initial.st_ino, initial.st_size, initial.st_mtime_ns):
+        raise ValueError('確認中に素材が変更されました。新しい作業フォルダで開始してください')
     return {'size': stat.st_size, 'mtime_ns': stat.st_mtime_ns, 'sha256': digest.hexdigest()}
 
 
@@ -110,7 +121,7 @@ def _timed_master(words, media, language, provider):
             grouped[-1]['words'][-1]['eos'] = False
             previous = grouped[-1]['words'][-1]['text']
             following = item['words'][0]['text']
-            if previous and following and previous[-1].isascii() and previous[-1].isalnum() and following[0].isascii() and following[0].isalnum():
+            if previous and following and previous[-1].isascii() and (previous[-1].isalnum() or previous[-1] in ',.!?;:') and following[0].isalpha() and not re.match(r'[\u3040-\u30ff\u3400-\u9fff]', following[0]):
                 item['words'][0]['text'] = ' ' + following
             grouped[-1]['words'].extend(item['words'])
         else:
@@ -124,7 +135,7 @@ def _timed_master(words, media, language, provider):
 def transcribe_local(media, language, *, artifact_dir=None):
     """Isolate MLX and ffmpeg from the long-running review server."""
     try:
-        timeout = int(os.environ.get('LOCAL_WHISPER_TIMEOUT_SECONDS', '600'))
+        timeout = int(os.environ.get('LOCAL_WHISPER_TIMEOUT_SECONDS', '7200'))
     except ValueError:
         raise ValueError('LOCAL_WHISPER_TIMEOUT_SECONDS は整数で指定してください') from None
     if not 30 <= timeout <= 7200:
@@ -184,12 +195,14 @@ def _transcribe_local_worker(media, language, artifact_dir):
     model = os.environ.get('MLX_WHISPER_MODEL', 'mlx-community/whisper-large-v3-turbo')
     result = mlx_whisper.transcribe(str(audio), path_or_hf_repo=model, **kwargs)
     whisper_hash = _save_raw(directory, 'whisper-provider.json', result)
+    if not any(segment.get('words') for segment in result.get('segments', [])):
+        raise ValueError('単語時刻付きの文字起こしが得られませんでした。素材の音声を確認してください')
     runtime = _diarization_python()
     if not runtime:
         raise ValueError('自動話者分離のPython環境を設定してください')
     diarization_path = directory / 'diarization-provider.json'
     subprocess.run([runtime, str(Path(__file__).resolve()), '--diarization-worker',
-                    str(audio), str(diarization_path)], check=True, timeout=7200)
+                    str(audio), str(diarization_path)], check=True, timeout=7200, env=_diarization_environment())
     diarization = json.loads(diarization_path.read_text(encoding='utf-8'))
     master = build_master(result, diarization, media.name, language, validate_export=False)
     for utterance in master['utterances']:
@@ -293,7 +306,12 @@ def extract_reference(path):
     if path.stat().st_size > 20_000_000:
         raise ValueError('参照資料は20MB以下にしてください')
     suffix = path.suffix.lower()
-    if suffix == '.txt':
+    if suffix == '.csv':
+        with path.open(encoding='utf-8-sig', newline='') as stream:
+            rows = list(csv.reader(stream))
+        return '\n'.join(' → '.join(cell.strip() for cell in row) if len(row) == 2 and all(cell.strip() for cell in row)
+                         else ','.join(row) for row in rows)
+    if suffix in ('.txt', '.md'):
         return path.read_text(encoding='utf-8-sig')
     if suffix == '.docx':
         with zipfile.ZipFile(path) as archive:
@@ -311,7 +329,7 @@ def extract_reference(path):
         except ImportError:
             raise ValueError('PDF 読み取りには pdftotext または pypdf が必要です') from None
         return '\n'.join(page.extract_text() or '' for page in PdfReader(path).pages)
-    raise ValueError('参照資料は TXT、DOCX、PDF のみ対応しています')
+    raise ValueError('参照資料は TXT、MD、CSV、DOCX、PDF のみ対応しています')
 
 
 def reference_terms(text):

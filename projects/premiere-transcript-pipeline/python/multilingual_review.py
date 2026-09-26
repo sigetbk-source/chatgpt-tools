@@ -198,12 +198,14 @@ class Workspace:
         self.state.setdefault('references',{'documents':[],'suggestions':[]})
         if self.state['workflow']['stage']=='transcribing':
             job=self.state['workflow'].get('job') or {}
-            if self.state['workflow'].get('engine')=='assemblyai' and job.get('remote_id') and self.aai_config.get('key') and self.media:
-                threading.Thread(target=self._run_initial_asr,args=('assemblyai',self.media,self.state['workflow']['language'],deepcopy(self.aai_config),job['remote_id']),daemon=True).start()
+            submitted=job.get('submitted_media_identity')
+            if self.state['workflow'].get('engine')=='assemblyai' and job.get('remote_id') and self.aai_config.get('key') and self.media and submitted and media_identity(self.media)==submitted:
+                threading.Thread(target=self._run_initial_asr,args=('assemblyai',self.media,self.state['workflow']['language'],deepcopy(self.aai_config),job['remote_id'],submitted),daemon=True).start()
             else:
+                reason='素材の内容が前回の送信時と一致しません。新しい作業フォルダで開始してください' if job.get('remote_id') and (not submitted or not self.media or media_identity(self.media)!=submitted) else 'server interrupted; resume the saved remote job if available'
                 self.state['workflow'].update({'stage':'error','status':'前回の実行が中断しました。設定を確認して再開始してください',
-                    'job':{'status':'failed','error':'server interrupted; resume the saved remote job if available',
-                           'remote_id':job.get('remote_id')}})
+                    'job':{'status':'failed','error':reason,'remote_id':job.get('remote_id'),
+                           'submitted_media_identity':submitted}})
                 atomic_json(self.path,self.state)
     def close(self): self.lock_file.close()
     def _save_workflow(self,state):
@@ -312,10 +314,15 @@ class Workspace:
             if not availability['available']: raise ValueError(availability['reason'])
             if engine=='assemblyai' and p.get('confirm_external') is not True:
                 raise ValueError('AssemblyAI への音声送信を明示確認してください')
-            remote_id=(workflow.get('job') or {}).get('remote_id') if engine=='assemblyai' else None
-            workflow.update({'stage':'transcribing','status':'文字起こし中','job':{'status':'running','error':None,'remote_id':remote_id}})
+            previous=workflow.get('job') or {}
+            remote_id=previous.get('remote_id') if engine=='assemblyai' else None
+            submitted=media_identity(self.media)
+            if remote_id and previous.get('submitted_media_identity')!=submitted:
+                raise Conflict('素材の内容が前回の送信時と一致しません。新しい作業フォルダで開始してください')
+            workflow.update({'stage':'transcribing','status':'文字起こし中','job':{'status':'running','error':None,
+                'remote_id':remote_id,'submitted_media_identity':submitted}})
             result=self._save_workflow(state)
-            threading.Thread(target=self._run_initial_asr,args=(engine,self.media,workflow['language'],deepcopy(self.aai_config),remote_id),daemon=True).start()
+            threading.Thread(target=self._run_initial_asr,args=(engine,self.media,workflow['language'],deepcopy(self.aai_config),remote_id,submitted),daemon=True).start()
             return result
         if route=='/api/references/load':
             paths=p.get('paths')
@@ -369,31 +376,44 @@ class Workspace:
             self._invalidate_output(state)
             return self._save_workflow(state)
         raise ValueError('unknown workflow route')
-    def _run_initial_asr(self,engine,media,language,config,remote_id=None):
+    def _run_initial_asr(self,engine,media,language,config,remote_id=None,submitted=None):
         try:
             before=media_identity(media)
+            if submitted is None or before!=submitted:
+                raise Conflict('処理前に素材が変更されました。新しい作業フォルダで開始してください')
             def save_remote_id(value):
                 with self.lock:
+                    if media_identity(media)!=submitted:
+                        raise Conflict('送信中に素材が変更されました')
                     state=deepcopy(self.state); state['workflow']['job']['remote_id']=value
                     atomic_json(self.path,state); self.state=state
             artifacts=self.root/'provider'/uuid.uuid4().hex
             master=transcribe_local(media,language,artifact_dir=artifacts) if engine=='local-whisper' else transcribe_assemblyai(media,language,config,remote_id,save_remote_id,artifact_dir=artifacts)
             master=normalize(master)
-            if media_identity(media)!=before: raise ValueError('処理中に素材が変更されました')
+            if media_identity(media)!=submitted: raise ValueError('処理中に素材が変更されました')
+            for artifact in master.get('provenance',{}).get('raw_artifacts',{}).values():
+                if artifact.get('file'):
+                    name=Path(artifact['file'])
+                    if name.name!=str(name): raise ValueError('生データのファイル名が不正です')
+                    artifact['file']=str(artifacts.relative_to(self.root)/name)
             with self.lock:
                 if self.state['master'] or self.state['workflow']['stage']!='transcribing': return
+                if (self.state['workflow'].get('job') or {}).get('submitted_media_identity')!=submitted:
+                    raise Conflict('文字起こし結果の元素材が一致しません')
                 source=self.root/'initial-master.json'
                 if source.exists(): raise ValueError('既存の初回文字起こしを上書きしません')
                 atomic_json(source,master); raw=source.read_bytes()
                 state=deepcopy(self.state); state['source']={'path':str(source),'sha256':hashlib.sha256(raw).hexdigest()}
                 state['master']=master; state['speaker_ids']={s['key']:str(uuid.uuid4()) for s in master['speakers']}
-                state['workflow'].update({'stage':'review','status':'文字起こし候補を確認してください','job':{'status':'completed','error':None}})
+                state['workflow'].update({'stage':'review','status':'文字起こし候補を確認してください','job':{'status':'completed','error':None,
+                    'submitted_media_identity':submitted}})
                 self._save_workflow(state)
         except Exception as exc:
             with self.lock:
                 state=deepcopy(self.state); state['workflow'].update({'stage':'error','status':'文字起こしに失敗しました',
                     'job':{'status':'failed','error':str(exc)[:500],
-                           'remote_id':(state['workflow'].get('job') or {}).get('remote_id')}})
+                           'remote_id':(state['workflow'].get('job') or {}).get('remote_id'),
+                           'submitted_media_identity':(state['workflow'].get('job') or {}).get('submitted_media_identity')}})
                 self._save_workflow(state)
     def project(self):
         with self.lock:
