@@ -5,6 +5,7 @@ import json
 import math
 from pathlib import Path
 import uuid
+import unicodedata
 
 
 LANGUAGES = set('en-us en-gb zh-hk cmn-hans cmn-hant es-es de-de fr-fr ja-jp pt-pt pt-br ko-kr it-it ru-ru hi-in nb-no sv-se nl-nl da-dk id-id th-th vi-vn ms-my tr-tr pl-pl fil-ph te-in ml-in pa-in ??-??'.split())
@@ -20,6 +21,10 @@ def nonempty(value, label):
     if not isinstance(value, str) or not value.strip():
         raise ValueError(label + ' must be a nonempty string')
     return value
+
+
+def japanese_char(value):
+    return bool(value) and ('\u3040' <= value <= '\u30ff' or '\u3400' <= value <= '\u9fff')
 
 
 def convert(master, speaker_ids=None):
@@ -80,16 +85,33 @@ def convert(master, speaker_ids=None):
             tags = word.get('tags', [])
             if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
                 raise ValueError('tags must be strings')
-            exported.append({'text': nonempty(word.get('text'), 'word text'),
+            word_text = nonempty(word.get('text'), 'word text')
+            exported.append({'text': word_text,
                              'start': start, 'duration': end - start,
                              'confidence': confidence, 'eos': eos,
                              'tags': [tag for tag in tags if tag in ('profanity', 'filler')], 'type': kind})
             previous_word_start = start
-        start = words[0]['start']
+        envelope = utterance.get('review_envelope', {})
+        start = number(envelope.get('start', words[0]['start']), 'segment start')
+        segment_end = number(envelope.get('end', max(w['end'] for w in words)), 'segment end')
+        if segment_end < start or any(w['start'] < start or w['end'] > segment_end for w in words):
+            raise ValueError('word timing falls outside segment envelope')
         if start < previous_start:
             raise ValueError('utterances must be ordered by start')
-        segments.append({'start': start, 'duration': max(w['end'] for w in words) - start,
-                         'language': language, 'speaker': ids[key], 'words': exported})
+        segment_language = utterance.get('language', language)
+        if segment_language not in LANGUAGES or segment_language == '??-??':
+            raise ValueError('utterance language is missing or unsupported')
+        previous = ''
+        for index, word in enumerate(exported):
+            stripped = word['text'].lstrip()
+            if index == 0: word['text'] = stripped
+            last_japanese = max((i for i,c in enumerate(previous) if japanese_char(c)), default=-1)
+            suffix = previous[last_japanese + 1:] if last_japanese >= 0 else previous
+            separators = all(c.isspace() or unicodedata.category(c).startswith(('P','Z')) for c in suffix)
+            if last_japanese >= 0 and separators and japanese_char(stripped[:1]): word['text'] = stripped
+            previous += word['text']
+        segments.append({'start': start, 'duration': segment_end - start,
+                         'language': segment_language, 'speaker': ids[key], 'words': exported})
         previous_start = start
     return {'language': language, 'speakers': output_speakers, 'segments': segments}
 

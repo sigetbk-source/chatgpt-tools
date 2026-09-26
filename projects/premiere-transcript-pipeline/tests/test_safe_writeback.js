@@ -12,6 +12,7 @@ function host(saveResults = [true]) {
     save: async () => { h.saves++; return saveResults.shift() ?? false; }
   };
   h.ppro = { Project: { getActiveProject: async () => project }, ClipProjectItem: { cast: x => x },
+    FolderItem: { cast: x => { if (typeof x.getItems !== 'function') throw Error('not folder'); return x; } },
     Transcript: { exportToJSON: async () => JSON.stringify(h.state), importFromJSON: JSON.parse,
       createImportTextSegmentsAction: s => s } };
   h.args = { ppro: h.ppro, expected: { projectPath: '/project', clipName: 'clip', mediaPath: '/media' },
@@ -35,5 +36,21 @@ function host(saveResults = [true]) {
   await assert.rejects(writeback(h.args), e => e.result.recovery.saved === false && !!e.result.recovery.error);
   h = host(); h.args.persistBackup = async () => { h.state = { changed: true }; return '/backup'; };
   await assert.rejects(writeback(h.args)); assert.strictEqual(h.imports, 0);
+  h = host();
+  const nested = { name: 'bin', getItems: async () => [{ name: 'clip', getMediaFilePath: async () => '/media' }] };
+  const originalProject = await h.ppro.Project.getActiveProject();
+  h.ppro.Project.getActiveProject = async () => ({ ...originalProject,
+    getRootItem: async () => ({ getItems: async () => [nested] }) });
+  // The recursive target lookup must work below the root bin.
+  assert.strictEqual((await writeback(h.args)).verified, true);
+  h = host();
+  const duplicateProject = await h.ppro.Project.getActiveProject();
+  h.ppro.Project.getActiveProject = async () => ({ ...duplicateProject,
+    getRootItem: async () => ({ getItems: async () => [
+      { name: 'clip', getMediaFilePath: async () => '/media' },
+      { name: 'bin', getItems: async () => [{ name: 'clip', getMediaFilePath: async () => '/media' }] }
+    ] }) });
+  await assert.rejects(writeback(h.args), /ambiguous/);
+  assert.strictEqual(h.imports, 0);
   console.log('Safe writeback: success, mismatch, backup failure, save failure, recovery failure, stale input passed');
 })().catch(e => { console.error(e); process.exitCode = 1; });

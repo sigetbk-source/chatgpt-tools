@@ -3,8 +3,17 @@ from copy import deepcopy
 from premiere_export import convert
 
 
+def validate_for_edit(master):
+    """Unknown per-utterance language is valid review state, but not export state."""
+    candidate = deepcopy(master)
+    for utterance in candidate.get('utterances', []):
+        if utterance.get('language') == '??-??':
+            utterance['language'] = candidate.get('language')
+    convert(candidate)
+
+
 def edit(master, operation, index, speaker, word_index=None):
-    convert(master)  # Validate input using the existing canonical exporter.
+    validate_for_edit(master)
     if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(master['utterances']):
         raise ValueError('invalid utterance index')
     if speaker not in {s['key'] for s in master['speakers']}:
@@ -39,5 +48,5 @@ def edit(master, operation, index, speaker, word_index=None):
         del utterances[index + 1]
     else:
         raise ValueError('unsupported operation')
-    convert(result)
+    validate_for_edit(result)
     return result

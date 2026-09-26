@@ -22,16 +22,27 @@ async function resolveTarget(ppro, expected) {
   const same = (a, b) => typeof a === 'string' && a.normalize('NFC') === b.normalize('NFC');
   const project = await ppro.Project.getActiveProject();
   if (!project || !same(project.path, expected.projectPath)) throw Error('Wrong project');
-  // Initial integration is deliberately limited to unique root-level clips.
-  const matches = (await (await project.getRootItem()).getItems()).filter(i => same(i.name, expected.clipName));
-  if (matches.length !== 1) throw Error('Missing or ambiguous clip');
-  const clip = ppro.ClipProjectItem.cast(matches[0]);
-  if (!clip || !same(await clip.getMediaFilePath(), expected.mediaPath)) throw Error('Wrong media');
-  return { project, clip };
+  if (expected.projectGuid && String(project.guid) !== String(expected.projectGuid)) throw Error('Wrong project GUID');
+  const matches = [];
+  const visit = async item => {
+    if (same(item.name, expected.clipName)) {
+      let clip = null;
+      try { clip = ppro.ClipProjectItem.cast(item); } catch (_) { /* bin */ }
+      if (clip && same(await clip.getMediaFilePath(), expected.mediaPath) &&
+          (!expected.itemId || String(clip.getId()) === String(expected.itemId))) matches.push(clip);
+    }
+    let folder = null;
+    try { folder = ppro.FolderItem.cast(item); } catch (_) { /* clip */ }
+    if (folder && typeof folder.getItems === 'function')
+      for (const child of await folder.getItems()) await visit(child);
+  };
+  await visit(await project.getRootItem());
+  if (matches.length !== 1) throw Error('Missing or ambiguous clip/media');
+  return { project, clip: matches[0] };
 }
 
 /** persistBackup must durably save the full transcript and target, and return a path. */
-async function writeback({ ppro, expected, candidate, expectedReadback, expectedBefore, persistBackup, label }) {
+async function writeback({ ppro, expected, candidate, expectedReadback, expectedBefore, persistBackup, label, beforeImport }) {
   if (typeof persistBackup !== 'function' || !expectedBefore || !expectedReadback) throw Error('Backup and expectations required');
   if (typeof label !== 'string' || !label.trim()) throw Error('Undo label required');
   let target = await resolveTarget(ppro, expected);
@@ -42,6 +53,7 @@ async function writeback({ ppro, expected, candidate, expectedReadback, expected
   if (typeof backupPath !== 'string' || !backupPath) throw Error('Backup not persisted');
   target = await resolveTarget(ppro, expected);
   equal(await read(target.clip), backup);
+  if (beforeImport) beforeImport();
   let attempted = false;
   try {
     attempted = true;
