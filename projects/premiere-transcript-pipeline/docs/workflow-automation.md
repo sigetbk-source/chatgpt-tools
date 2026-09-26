@@ -75,4 +75,4 @@ APIキーは既存の `--configure-running-server`、`--configure-translation-ru
 - 同じ新規シーケンスへ専用CEP経路で検証用併記SRTを配置。作成前0本、作成・保存後1本の字幕トラックをUXPで確認し、プロジェクト全体のバックアップを保存した。結果は `workflow-qa-20260926/caption-placement-result.json`。Premiere画面でもサンプル時点のドイツ語・日本語字幕が表示されることを確認した。全字幕の文字欠け・スタイル・タイミングの網羅確認までは行っていない。
 - 新規作業画面で開始時の言語モード・エンジン選択、資料入力、未処理時の出力操作無効化を確認。修正の正本 `review-demo/state.json` は作業前後のSHA256一致を確認。
 - 新しい初回AssemblyAI送信と初回Transcript取得不能時のプロジェクトバックアップ経路は未検証。ローカルWhisperの短尺試験は既存モデル読み込みで応答待ちとなり、成功として扱わない。
-- 最終コードでPython 56件とUXP・CEPのJavaScript 7スクリプトが成功。UXPの連携フォルダ接続と実ランナーへの開始／再開要求の往復を確認した。UXPパネルの開始ボタンからブラウザ表示までの通し操作は未検証。UXP Developer Toolsは一度クラッシュしたが、再起動後にローカルのQAフォルダへ `.ccx` を作成し、ZIP内のmanifestとファイル構成を確認した。常設インストールは未実施。
+- 最終コードでPython 56件とUXP・CEPのJavaScript 7スクリプトが成功。UXPの連携フォルダ接続と実ランナーへの開始／再開要求の往復を確認した。UXPパネルの開始ボタンからブラウザ表示までの通し操作は未検証。UXP Developer Toolsは一度クラッシュしたが、再起動後にローカルのQAフォルダへ `.ccx` を作成し、ZIP内のmanifestとファイル構成を確認した。Creative Cloudにバージョン0.1.0のインストール済み表示があり、Premiere 25のメニューからパネルを開けた。Premiere再起動後の再表示は未検証。
