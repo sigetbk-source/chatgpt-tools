@@ -12,6 +12,7 @@ let busy = false;
 let workspace = '';
 let selectedTarget = null;
 let reviewUrl = '';
+let selectedMode = 'multilingual';
 const handled = new Set();
 
 function message(value) { status.textContent = value; }
@@ -95,7 +96,7 @@ async function startReview() {
   await inspectTarget();
   runnerLabel.textContent = '起動・再開中…';
   const result = await runnerRequest(fs, root, 'start_or_resume', {
-    workspace, mode: document.getElementById('mode').value, target: selectedTarget,
+    workspace, mode: selectedMode, target: selectedTarget,
   }, { timeoutMs: 30000 });
   renderRunner(result);
   if (reviewUrl) await openReview();
@@ -187,6 +188,13 @@ document.getElementById('choose-workspace').addEventListener('click', uiAction(c
 document.getElementById('inspect-target').addEventListener('click', uiAction(inspectTarget));
 document.getElementById('refresh').addEventListener('click', uiAction(refreshRunner));
 document.getElementById('start').addEventListener('click', uiAction(startReview));
+for (const mode of ['multilingual', 'ja-jp']) {
+  document.getElementById(`mode-${mode}`).addEventListener('click', () => {
+    selectedMode = mode;
+    for (const value of ['multilingual', 'ja-jp'])
+      document.getElementById(`mode-${value}`).classList.toggle('mode-active', value === mode);
+  });
+}
 document.getElementById('open').addEventListener('click', uiAction(openReview));
 loadLocalConfig().catch(error => message(String(error)));
 setInterval(() => poll().catch(error => message(String(error))), 250);

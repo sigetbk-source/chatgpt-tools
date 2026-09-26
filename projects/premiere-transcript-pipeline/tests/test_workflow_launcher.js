@@ -22,7 +22,10 @@ async function test() {
     assert.throws(() => assertLoopbackUrl(url));
   const root = await fixture();
   try {
-    const fakeFs = { ...fs, async rename(from, to) {
+    const fakeFs = { ...fs, async writeFile(file, data, options) {
+      assert.notStrictEqual(options?.flag, 'wx');
+      return fs.writeFile(file, data, options);
+    }, async rename(from, to) {
       await fs.rename(from, to);
       const request = JSON.parse(await fs.readFile(to, 'utf8'));
       assert.strictEqual(request.operation, 'status');

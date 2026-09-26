@@ -1,14 +1,14 @@
 <!doctype html><html lang="ja"><head><meta charset="utf-8"><style>
 html,body{height:100%;margin:0}body{font:14px sans-serif;padding:12px;color:#eee;background:#242424;box-sizing:border-box;overflow-y:auto}button,select{padding:8px 10px;margin:3px}
 p{line-height:1.5}#status,#workspace,#target,#runner{white-space:pre-wrap;line-height:1.5;overflow-wrap:anywhere}
-small{color:#bbb}.card{border:1px solid #555;padding:10px;margin:10px 0}
+small{color:#bbb}.card{border:1px solid #555;padding:10px;margin:10px 0}.mode-active{outline:2px solid #6aaaff}
 </style></head><body>
 <h3>Transcript Workflow</h3>
 <p>Premiere のプロジェクトパネルで対象の素材を1件選び、作業フォルダを指定してください。</p>
 <div class="card"><button id="choose">連携フォルダを選ぶ</button><div id="status">未接続</div></div>
 <div class="card"><button id="choose-workspace">作業フォルダを選ぶ</button><div id="workspace">未選択</div></div>
 <div class="card"><button id="inspect-target">Premiere素材を確認</button><div id="target">未確認</div></div>
-<div class="card"><label for="mode">修正方法</label><select id="mode"><option value="multilingual">多言語字幕</option><option value="ja-jp">日本語話者修正</option></select>
-<button id="start">開始・再開</button><button id="open" disabled>修正画面を開く</button><button id="refresh">状態更新</button><div id="runner">ローカル画面の状態は未確認</div></div>
+<div class="card"><div id="runner">ローカル画面の状態は未確認</div><span>修正方法</span><button id="mode-multilingual" class="mode-active" type="button">多言語字幕</button><button id="mode-ja-jp" type="button">日本語話者修正</button>
+<button id="start">開始・再開</button><button id="open" disabled>修正画面を開く</button><button id="refresh">状態更新</button></div>
 <small>字幕配置は専用CEPパネルが担当します。Premiereへの適用時は対象照合、バックアップ、読み戻し、保存を確認します。</small>
 <script src="index.js"></script></body></html>

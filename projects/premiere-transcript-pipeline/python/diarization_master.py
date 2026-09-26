@@ -42,7 +42,7 @@ def assign_word(word, turns):
             'speaker_overlap_seconds': scores}
 
 
-def build_master(whisper, diarization, source_id, language):
+def build_master(whisper, diarization, source_id, language, *, validate_export=True):
     turns = []
     for item in diarization['segments']:
         start, end = interval(item)
@@ -90,7 +90,8 @@ def build_master(whisper, diarization, source_id, language):
         'utterances': utterances, 'provenance': {
             'method': 'maximum_word_time_overlap', 'speaker_identity_verified': False,
             'diarization_metadata': diarization.get('metadata', {}), 'counts': counts}}
-    convert(master)
+    if validate_export:
+        convert(master)
     return master
 
 

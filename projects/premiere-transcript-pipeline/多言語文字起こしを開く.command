@@ -1,20 +1,18 @@
 #!/bin/bash
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
-if [ "$#" -lt 1 ]; then
-  default_root="${PREMIERE_REVIEW_WORKSPACES:-$HOME/Documents/Premiere Transcript Reviews}"
-  printf '作業フォルダを入力してください（空欄で新規作成）: '
-  IFS= read -r entered
-  workspace="${entered:-$default_root/$(date +%Y%m%d-%H%M%S)}"
-else
-  workspace="$1"
-fi
 port="${2:-8892}"
 media="${3:-}"
 python_bin="${PREMIERE_REVIEW_PYTHON:-}"
 if [ -z "$python_bin" ]; then
   runtime="$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3"
   if [ -x "$runtime" ]; then python_bin="$runtime"; else python_bin="$(command -v python3)"; fi
+fi
+if [ "$#" -lt 1 ]; then
+  workspace="$("$python_bin" "$here/python/native_picker.py" --workspace)"
+  if [ -z "$workspace" ]; then exit 0; fi
+else
+  workspace="$1"
 fi
 args=(--workspace "$workspace" --port "$port")
 if [ -n "$media" ]; then args+=(--media "$media"); fi

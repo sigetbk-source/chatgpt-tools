@@ -8,3 +8,12 @@ dialog{width:min(560px,92vw);padding:0;color:#eef1f3;background:#171a1d;border:1
 .heading-actions{display:flex;gap:8px;align-items:center}.heading-actions button{font-size:11px}#workflow-setup.compact>:not(.section-heading),#reference-section.compact>:not(.section-heading){display:none}#workflow-setup.compact,#reference-section.compact{padding:12px 16px;margin-top:9px;margin-bottom:9px}#workflow-setup.compact .section-heading,#reference-section.compact .section-heading{margin:0}
 .premiere-box{margin-top:18px;padding-top:16px;border-top:1px solid #394348}.premiere-box h3{margin:0;font-size:15px}.premiere-box .row{margin:12px 0}#premiere-target,#premiere-progress{overflow-wrap:anywhere}#premiere-progress{font-size:12px;color:#afd9c9}
 .premiere-confirm{display:block;padding:10px 12px;margin:10px 0;background:#2f2a20;border-left:3px solid #d7aa54;border-radius:6px;font-size:12px;line-height:1.6}.premiere-confirm input{margin-right:6px;accent-color:#72d4a8}.caption-placement{margin-top:16px;padding-top:12px;border-top:1px solid #394348}.caption-placement h4{margin:0;font-size:13px}.caption-placement button{margin-top:2px}
+
+/* Native file choices keep technical paths secondary in the initial setup. */
+.source-picker { min-width:0; }
+.source-picker>button { margin-top:7px; }
+.selected-file { margin:9px 0;color:#86d7ba;overflow-wrap:anywhere;font-size:13px; }
+.path-fallback { margin-top:12px;color:#aeb6bc;font-size:12px; }
+.path-fallback summary { cursor:pointer; }
+.path-fallback label { margin-top:10px; }
+#workspace-location { overflow-wrap:anywhere; }

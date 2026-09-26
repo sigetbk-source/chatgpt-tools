@@ -22,6 +22,11 @@ NONCE = re.compile(r'^[a-f0-9]{32}$')
 MEDIA_SUFFIXES = {'.mov', '.wav', '.mp4', '.m4a', '.mp3'}
 
 
+def same_file(left, right):
+    try: return os.path.samefile(left, right)
+    except (OSError, TypeError, ValueError): return False
+
+
 def atomic_response(path, value):
     fd, temporary = tempfile.mkstemp(prefix='.reply-', dir=path.parent)
     try:
@@ -63,7 +68,7 @@ class Runner:
         try:
             with urllib.request.urlopen(self.url + 'api/project', timeout=1) as response:
                 project = json.load(response)
-            if not project.get('workspace_root') or Path(project['workspace_root']).resolve() != self.workspace:
+            if not project.get('workspace_root') or not same_file(project['workspace_root'], self.workspace):
                 raise ValueError('review port belongs to another workspace')
             return project
         except (urllib.error.URLError, TimeoutError, ConnectionError):
@@ -94,12 +99,12 @@ class Runner:
         if state_path.exists():
             state = json.loads(state_path.read_text(encoding='utf-8'))
             stored = state.get('media')
-            if stored and Path(stored).resolve(strict=True) != media:
+            if stored and not same_file(stored, media):
                 raise ValueError('workspace belongs to a different source media')
         running = self._probe()
         if running:
             attached_media = (running.get('workflow') or {}).get('media_path')
-            if attached_media and Path(attached_media).resolve(strict=True) != media:
+            if attached_media and not same_file(attached_media, media):
                 raise ValueError('running review server belongs to another source media')
             if not attached_media:
                 body = json.dumps({'revision': running['revision'], 'media_path': str(media)}).encode()
@@ -127,7 +132,7 @@ class Runner:
             project = self._probe()
             if project:
                 attached_media = (project.get('workflow') or {}).get('media_path')
-                if not attached_media or Path(attached_media).resolve(strict=True) != media:
+                if not attached_media or not same_file(attached_media, media):
                     raise ValueError('review server opened the wrong source media')
                 return self._status()
             time.sleep(.2)
@@ -140,7 +145,7 @@ class Runner:
         source_dir = Path(data['source_dir']).expanduser()
         if not source_dir.is_absolute(): source_dir = self.legacy_root / source_dir
         source = source_dir / data.get('source_media', data.get('audio', ''))
-        if source.resolve(strict=True) != media:
+        if not same_file(source, media):
             raise ValueError('日本語案件JSONの素材がPremiereの選択素材と一致しません')
         japanese_url = 'http://127.0.0.1:8877/setup'
         if self.japanese_child and self.japanese_child.poll() is None:
@@ -186,14 +191,19 @@ class Runner:
             raise ValueError('unsupported launcher operation')
         payload = request.get('payload')
         if (not isinstance(payload, dict) or not isinstance(payload.get('workspace'), str) or
-                Path(payload['workspace']).expanduser().resolve() != self.workspace):
+                not same_file(Path(payload['workspace']).expanduser(), self.workspace)):
             raise ValueError('request workspace differs from launcher workspace')
-        if operation == 'status': return self._status()
-        media = self._target(payload.get('target'))
-        mode = payload.get('mode')
-        if mode == 'multilingual': return self._start_multilingual(media)
-        if mode == 'ja-jp': return self._start_japanese(media)
-        raise ValueError('unsupported review mode')
+        if operation == 'status': result = self._status()
+        else:
+            media = self._target(payload.get('target'))
+            mode = payload.get('mode')
+            if mode == 'multilingual': result = self._start_multilingual(media)
+            elif mode == 'ja-jp': result = self._start_japanese(media)
+            else: raise ValueError('unsupported review mode')
+        # Echo the verified request spelling. macOS can represent one folder
+        # with either composed or decomposed Japanese characters; the UXP
+        # client checks the returned workspace string exactly.
+        return {**result, 'workspace': payload['workspace']}
 
     def serve(self):
         inbox = self.ipc_root / 'launcher-inbox'; claims = self.ipc_root / 'launcher-claims'

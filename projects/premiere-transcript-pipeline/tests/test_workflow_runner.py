@@ -2,6 +2,7 @@ import sys
 import tempfile
 import time
 import unittest
+import unicodedata
 from pathlib import Path
 from unittest.mock import patch
 
@@ -45,6 +46,22 @@ class RunnerTest(unittest.TestCase):
             self.assertEqual(spawned.call_args.kwargs['env']['PREMIERE_TRANSCRIPT_IPC_ROOT'], str(runner.ipc_root))
             self.assertTrue(spawned.call_args.kwargs['start_new_session'])
             runner.lock.close()
+
+    def test_workspace_accepts_same_mac_folder_with_different_unicode_form(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / unicodedata.normalize('NFD', '案件フォルダ')
+            root.mkdir()
+            runner = self.make_runner(root)
+            alternate = unicodedata.normalize('NFC', str(runner.workspace))
+            request = {'version': 1, 'nonce': 'b' * 32, 'operation': 'status',
+                       'deadlineMs': int(time.time() * 1000) + 30000,
+                       'payload': {'workspace': alternate}}
+            try:
+                if not Path(alternate).exists():
+                    self.skipTest('filesystem distinguishes Unicode normalization forms')
+                with patch.object(runner, '_probe', return_value=None):
+                    self.assertEqual(runner.handle(request)['workspace'], alternate)
+            finally: runner.lock.close()
 
     def test_python_venv_symlink_is_not_resolved_to_base_interpreter(self):
         with tempfile.TemporaryDirectory() as folder:

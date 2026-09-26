@@ -39,8 +39,21 @@ async function runnerRequest(fs, root, operation, payload, {
   const pending = `${root}/launcher-inbox/${id}.tmp`;
   const ready = `${root}/launcher-inbox/${id}.json`;
   const responsePath = `${root}/launcher-outbox/${id}.json`;
-  await fs.writeFile(pending, JSON.stringify(request), { encoding: 'utf-8', flag: 'wx' });
-  await fs.rename(pending, ready);
+  // Premiere's UXP fs does not consistently honor Node's exclusive `wx` flag.
+  // The cryptographically random filename is checked before writing, then
+  // read back before the atomic rename exposes it to the local runner.
+  const inbox = `${root}/launcher-inbox`;
+  const existing = await fs.readdir(inbox);
+  if (existing.includes(`${id}.tmp`) || existing.includes(`${id}.json`))
+    throw Error('Runner request filename collision');
+  try {
+    await fs.writeFile(pending, JSON.stringify(request), { encoding: 'utf-8' });
+    if (await fs.readFile(pending, 'utf-8') !== JSON.stringify(request))
+      throw Error('Runner request readback mismatch');
+    await fs.rename(pending, ready);
+  } catch (error) {
+    throw Error(`Cannot queue local runner request: ${String(error)}`);
+  }
   try {
     while (now() < until) {
       const files = await fs.readdir(`${root}/launcher-outbox`);

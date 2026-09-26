@@ -35,7 +35,7 @@ $('#manage-speakers').onclick=()=>openSpeakerDialog();$('#language-mismatches').
 
 // The setup and reference panels stay mounted while utterance cards are redrawn.
 // Their text inputs therefore survive project polling and unrelated edits.
-let configuredSignature='',workflowPoll=null,lastExport=null,initialCompactApplied=false,srtDirty=false,srtSelected=null,premiereTarget=null,premiereTargetRevision=null,premiereSnapshot=false,premiereFirstImport=false;
+let setupHydrated=false,configuredSignature='',workflowPoll=null,lastExport=null,initialCompactApplied=false,srtDirty=false,srtSelected=null,premiereTarget=null,premiereTargetRevision=null,premiereSnapshot=false,premiereFirstImport=false;
 const workflowMode=()=>document.querySelector('input[name="workflow-mode"]:checked')?.value||'multilingual';
 const workflowEngine=()=>document.querySelector('input[name="workflow-engine"]:checked')?.value||'local-whisper';
 const setupSignature=()=>JSON.stringify([workflowEngine(),$('#media-path').value.trim(),$('#initial-language').value]);
@@ -45,10 +45,17 @@ function renderWorkflow(){
  $('#japanese-route').textContent=japanese?'従来の日本語ツールを起動してから開いてください。今回の環境では「日本語のみを開く.command」で対象案件を選びます。':'既存の日本語確認画面のURLが指定されていません。起動時に --japanese-url を指定するとここから開けます。';
  $('#japanese-route').classList.toggle('error',workflowMode()==='japanese'&&!japanese);if(japanese){const link=document.createElement('a');link.href=project.japanese_url;link.textContent=' 起動後に日本語のみの画面を開く';$('#japanese-route').append(link)}
  $('#multilingual-setup').hidden=workflowMode()==='japanese';
- if(w.media_path&&!$('#media-path').value)$('#media-path').value=w.media_path;if(w.language&&!configuredSignature)$('#initial-language').value=w.language;
- if(w.engine&&!configuredSignature){const option=document.querySelector(`input[name="workflow-engine"][value="${w.engine}"]`);if(option)option.checked=true;}
- if(w.engine&&w.media_path&&!configuredSignature)configuredSignature=setupSignature();
- for(const input of document.querySelectorAll('input[name="workflow-engine"]')){const info=engines[input.value];input.disabled=!!info&&!info.available&&!running;input.closest('label').title=info&&!info.available?info.reason||'利用できません':'';}
+ if(!setupHydrated){
+  if(w.media_path)$('#media-path').value=w.media_path;
+  if(w.language)$('#initial-language').value=w.language;
+  if(w.engine){const option=document.querySelector(`input[name="workflow-engine"][value="${w.engine}"]`);if(option)option.checked=true;}
+  if(w.engine&&w.media_path)configuredSignature=setupSignature();
+  setupHydrated=true;
+ }
+ $('#workspace-location').textContent=w.workspace_path?`保存先: ${w.workspace_path}`:'';
+ const selectedPath=$('#media-path').value.trim();$('#media-selected').textContent=selectedPath?selectedPath.split('/').pop():'まだ選択していません';$('#media-selected').title=selectedPath;
+ $('#media-pick').disabled=running||!!project.items.length;$('#media-path').disabled=running||!!project.items.length;$('#initial-language').disabled=running||!!project.items.length;
+ for(const input of document.querySelectorAll('input[name="workflow-engine"]')){const info=engines[input.value];input.disabled=running||!!project.items.length||(!!info&&!info.available);input.closest('label').title=info&&!info.available?info.reason||'利用できません':'';}
  const selected=engines[workflowEngine()];$('#engine-reason').textContent=selected&&!selected.available?selected.reason||'この文字起こし方法は現在利用できません。':'';
  const canStart=!!$('#media-path').value.trim()&&(!selected||selected.available)&&!running&&!project.items.length;
  $('#workflow-configure').disabled=running||!canStart;
@@ -80,8 +87,11 @@ function renderWorkflow(){
  syncPlayer();
 }
 function syncPlayer(){
- if(!project.has_media||player)return;
- player=project.has_video?$('#video'):$('#audio');player.src='/media';player.hidden=false;
+ if(!project.has_media)return;
+ const mediaKey=project.workflow?.media_path||project.source_media_name;
+ if(player&&player.dataset.mediaKey===mediaKey)return;
+ if(player){player.pause();player.hidden=true;}
+ stopAt=null;player=project.has_video?$('#video'):$('#audio');player.dataset.mediaKey=mediaKey;player.src='/media?revision='+project.revision;player.hidden=false;
  player.ontimeupdate=()=>{if(stopAt!==null&&player.currentTime>=stopAt){player.pause();stopAt=null}updateAlignmentPosition()};
  player.onpause=updateAlignmentPosition;player.onplay=updateAlignmentPosition;player.onseeked=updateAlignmentPosition;
 }
@@ -116,6 +126,20 @@ for(const input of document.querySelectorAll('input[name="workflow-mode"]'))inpu
 for(const input of document.querySelectorAll('input[name="workflow-engine"]'))input.onchange=renderWorkflow;
 $('#media-path').oninput=renderWorkflow;$('#initial-language').onchange=renderWorkflow;
 $('#workflow-configure').onclick=configureWorkflow;$('#workflow-start').onclick=startWorkflow;
+$('#media-pick').onclick=async()=>{
+ const result=await workflowPost('/api/picker/media',{},$('#workflow-progress'));
+ if(!result)return;
+ if(result.cancelled){$('#workflow-progress').textContent='素材の選択をキャンセルしました。';return}
+ $('#media-path').value=result.paths[0]||'';configuredSignature='';renderWorkflow();$('#workflow-progress').textContent='素材を選択しました。言語とエンジンを確認し、設定を保存してください。';
+};
+$('#reference-pick').onclick=async()=>{
+ if(drafts.size){note('未保存の原文または訳を保存してください。',true);return}
+ const result=await workflowPost('/api/picker/references',{},$('#reference-progress'));
+ if(!result)return;
+ if(result.cancelled){$('#reference-progress').textContent='資料の選択をキャンセルしました。';return}
+ await workflowPost('/api/references/load',{paths:result.paths},$('#reference-progress'));
+};
+
 $('#reference-load').onclick=async()=>{const paths=$('#reference-paths').value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);if(!paths.length){$('#reference-progress').textContent='資料の絶対パスを入力してください。';return}if(paths.some(x=>!x.startsWith('/'))){$('#reference-progress').textContent='すべて絶対パスで入力してください。';return}if(drafts.size){note('未保存の原文または訳を保存してください。',true);return}const result=await workflowPost('/api/references/load',{paths},$('#reference-progress'));if(result)$('#reference-paths').value=''};
 $('#reference-suggest').onclick=async()=>{if(drafts.size){note('未保存の原文または訳を保存してください。',true);return}await workflowPost('/api/references/suggest',{},$('#reference-progress'))};
 function updatePanelToggles(){for(const [section,button,open,closed] of [['#workflow-setup','#workflow-toggle','設定をたたむ','開始設定を開く'],['#reference-section','#reference-toggle','資料欄をたたむ','参照資料を開く']]){const collapsed=$(section).classList.contains('compact');$(button).textContent=collapsed?closed:open;$(button).setAttribute('aria-expanded',String(!collapsed))}}

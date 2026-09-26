@@ -9,6 +9,7 @@ from master_review import atomic_json, boundaries, utterance_text, Conflict
 from master_edit import edit
 from premiere_export import convert
 from srt_layout import LayoutError, LayoutLimits, checked_time, render_bilingual_cue, reviewed_pages
+from native_picker import pick_paths
 from workflow_backend import engine_availability, transcribe_local, transcribe_assemblyai, extract_reference, reference_terms, suggestions, media_identity
 from premiere_workflow import BridgeClient, CaptionBridgeClient, BridgeError, BridgeTimeout
 
@@ -375,7 +376,8 @@ class Workspace:
                 with self.lock:
                     state=deepcopy(self.state); state['workflow']['job']['remote_id']=value
                     atomic_json(self.path,state); self.state=state
-            master=transcribe_local(media,language) if engine=='local-whisper' else transcribe_assemblyai(media,language,config,remote_id,save_remote_id)
+            artifacts=self.root/'provider'/uuid.uuid4().hex
+            master=transcribe_local(media,language,artifact_dir=artifacts) if engine=='local-whisper' else transcribe_assemblyai(media,language,config,remote_id,save_remote_id,artifact_dir=artifacts)
             master=normalize(master)
             if media_identity(media)!=before: raise ValueError('処理中に素材が変更されました')
             with self.lock:
@@ -411,6 +413,7 @@ class Workspace:
                     'translation':u['translation'],'alignment_status':u['alignment_status'],'retry_candidates':candidates,
                     'srt_pages':deepcopy(u.get('srt_pages',[]))})
             workflow=deepcopy(self.state['workflow']); workflow['media_path']=str(self.media) if self.media else None
+            workflow['workspace_path']=str(self.root)
             workflow['engines']=engine_availability(self.aai_config)
             workflow['premiere']={'available':bool(self.premiere_ipc_root and (Path(self.premiere_ipc_root)/'inbox').is_dir() and
                 (Path(self.premiere_ipc_root)/'outbox').is_dir()),
@@ -762,7 +765,16 @@ def make_server(workspace,port=8892):
             try:
                 n=int(self.headers.get('Content-Length','0'))
                 if not 0<n<=1048576: raise ValueError('invalid body size')
-                p=json.loads(self.rfile.read(n)); self.reply(200,workspace.mutate(urlsplit(self.path).path,p))
+                p=json.loads(self.rfile.read(n)); route=urlsplit(self.path).path
+                if route in ('/api/picker/media','/api/picker/references'):
+                    if not isinstance(p,dict): raise ValueError('操作内容が不正です')
+                    with workspace.lock:
+                        if p.get('revision')!=workspace.state['revision']: raise Conflict('stale revision; reload')
+                        if route.endswith('/media') and (workspace.state['master'] or workspace.state['workflow']['stage']=='transcribing'):
+                            raise ValueError('確認中・処理中の素材は変更できません。新しい作業を開いてください')
+                    paths=pick_paths('media' if route.endswith('/media') else 'references')
+                    self.reply(200,{'cancelled':paths is None,'paths':paths or []}); return
+                self.reply(200,workspace.mutate(route,p))
             except Conflict as e: self.reply(409,{'error':str(e)})
             except BridgeTimeout as e: self.reply(504,{'error':str(e),'nonce':e.nonce,'outcome':'unknown'})
             except BridgeError as e: self.reply(502,{'error':str(e)})

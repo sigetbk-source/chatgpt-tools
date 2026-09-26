@@ -24,13 +24,54 @@ def _local_whisper_installed():
     return find_spec('mlx_whisper') is not None
 
 
+def _diarization_python():
+    configured = os.environ.get('PREMIERE_DIARIZATION_PYTHON')
+    if configured:
+        return str(Path(configured).expanduser())
+    from importlib.util import find_spec
+    if find_spec('pyannote') is not None:
+        return sys.executable
+    previous = Path.home() / 'Documents/案件フォルダ/work/tamago-independent-20260908/pyannote-env/bin/python'
+    return str(previous) if previous.is_file() else None
+
+
+@lru_cache(maxsize=4)
+def _diarization_ready(runtime):
+    if not runtime or not Path(runtime).is_file():
+        return False, False
+    try:
+        result = subprocess.run([runtime, '-c',
+            "import importlib.util,json; from huggingface_hub import get_token; print(json.dumps({'installed':importlib.util.find_spec('pyannote.audio') is not None,'credential':bool(get_token())}))"],
+            capture_output=True, text=True, timeout=20, check=True)
+        status = json.loads(result.stdout)
+        return bool(status['installed']), bool(status['credential'])
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return False, False
+
+
 def engine_availability(aai_config):
-    local = {'available': _local_whisper_installed(),
-             'reason': 'mlx_whisper はインストール済みです。実素材での完走は未確認です' if _local_whisper_installed()
-                       else 'mlx_whisper がこの Python 環境にありません',
-             'verification': 'installed_only' if _local_whisper_installed() else 'unavailable'}
-    cloud = bool(aai_config.get('key') and aai_config.get('model') and shutil.which(aai_config.get('ffmpeg') or 'ffmpeg'))
+    installed, credential = _diarization_ready(_diarization_python())
+    ready = _local_whisper_installed() and installed and credential
+    local = {'available': ready,
+             'reason': 'ローカルWhisperと自動話者分離を使用します。初回はモデル取得が必要な場合があります' if ready
+                       else 'mlx_whisper、pyannote実行環境、モデル利用承認済みのHugging Face認証が必要です',
+             'verification': 'dependencies_ready' if ready else 'unavailable',
+             'diarization_installed': installed, 'credential_present': credential}
+    cloud = bool(aai_config.get('key') and aai_config.get('model') and _ffmpeg(aai_config.get('ffmpeg')))
     return {'local-whisper': local, 'assemblyai': {'available': cloud, 'reason': '' if cloud else 'AssemblyAI キーと ffmpeg の設定が必要です'}}
+
+
+def _ffmpeg(configured=None):
+    if configured:
+        return shutil.which(configured)
+    found = shutil.which('ffmpeg')
+    if found:
+        return found
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except ImportError:
+        return None
 
 
 def media_identity(path):
@@ -80,7 +121,7 @@ def _timed_master(words, media, language, provider):
             'diarization_supplied': any(key != 'unknown' for key in speakers)}}
 
 
-def transcribe_local(media, language):
+def transcribe_local(media, language, *, artifact_dir=None):
     """Isolate MLX and ffmpeg from the long-running review server."""
     try:
         timeout = int(os.environ.get('LOCAL_WHISPER_TIMEOUT_SECONDS', '600'))
@@ -91,7 +132,9 @@ def transcribe_local(media, language):
     with tempfile.TemporaryDirectory(prefix='local-whisper-') as temporary:
         output = Path(temporary) / 'result.json'
         errors = Path(temporary) / 'errors.txt'
-        command = [sys.executable, str(Path(__file__).resolve()), '--mlx-worker', str(media), language, str(output)]
+        artifacts = Path(artifact_dir) if artifact_dir else Path(temporary) / 'provider'
+        artifacts.mkdir(parents=True, exist_ok=False)
+        command = [sys.executable, str(Path(__file__).resolve()), '--mlx-worker', str(media), language, str(output), str(artifacts)]
         with errors.open('wb') as error_stream:
             process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=error_stream,
                                        start_new_session=True)
@@ -110,25 +153,90 @@ def transcribe_local(media, language):
         return json.loads(output.read_text(encoding='utf-8'))
 
 
-def _transcribe_local_worker(media, language):
+def _save_raw(directory, name, value):
+    path = Path(directory) / name
+    with path.open('x', encoding='utf-8') as stream:
+        json.dump(value, stream, ensure_ascii=False, allow_nan=False,
+                  default=lambda item: item.item() if hasattr(item, 'item') else item.tolist())
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _transcribe_local_worker(media, language, artifact_dir):
     import mlx_whisper
-    kwargs = {'word_timestamps': True}
+    from diarization_master import build_master
+    directory = Path(artifact_dir)
+    ffmpeg = _ffmpeg()
+    if not ffmpeg:
+        raise ValueError('音声変換用ffmpegが見つかりません')
+    os.environ['PATH'] = str(Path(ffmpeg).parent) + os.pathsep + os.environ.get('PATH', '')
+    # MLX shells out to an executable named ffmpeg; bundled executables have versioned names.
+    bin_dir = directory / 'bin'; bin_dir.mkdir()
+    (bin_dir / 'ffmpeg').symlink_to(ffmpeg)
+    os.environ['PATH'] = str(bin_dir) + os.pathsep + os.environ['PATH']
+    os.environ.setdefault('HF_HUB_DISABLE_XET', '1')
+    audio = directory / 'audio-16k-mono.wav'
+    subprocess.run([ffmpeg, '-nostdin', '-y', '-loglevel', 'error', '-i', str(media), '-vn',
+                    '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', str(audio)], check=True, timeout=1800)
+    kwargs = {'word_timestamps': True, 'condition_on_previous_text': False,
+              'hallucination_silence_threshold': 2.0, 'task': 'transcribe', 'verbose': False}
     if language != '??-??':
         kwargs['language'] = language.split('-')[0]
     model = os.environ.get('MLX_WHISPER_MODEL', 'mlx-community/whisper-large-v3-turbo')
-    result = mlx_whisper.transcribe(str(media), path_or_hf_repo=model, **kwargs)
-    words = [word for segment in result.get('segments', []) for word in segment.get('words', [])]
-    detected = result.get('language') or ''
-    code = language if language != '??-??' else '??-??'
-    return _timed_master(words, media, code, 'mlx_whisper')
+    result = mlx_whisper.transcribe(str(audio), path_or_hf_repo=model, **kwargs)
+    whisper_hash = _save_raw(directory, 'whisper-provider.json', result)
+    runtime = _diarization_python()
+    if not runtime:
+        raise ValueError('自動話者分離のPython環境を設定してください')
+    diarization_path = directory / 'diarization-provider.json'
+    subprocess.run([runtime, str(Path(__file__).resolve()), '--diarization-worker',
+                    str(audio), str(diarization_path)], check=True, timeout=7200)
+    diarization = json.loads(diarization_path.read_text(encoding='utf-8'))
+    master = build_master(result, diarization, media.name, language, validate_export=False)
+    for utterance in master['utterances']:
+        utterance['language'] = language
+        utterance['language_source'] = 'initial_manual' if language != '??-??' else 'unconfirmed'
+        utterance['words'][-1]['eos'] = True
+    master['provenance'].update(provider='mlx_whisper', model=model, built_in_premiere_asr=False,
+        diarization_supplied=bool(diarization.get('segments')), provider_detected_language=result.get('language'),
+        raw_artifacts={'whisper': {'file': 'whisper-provider.json', 'sha256': whisper_hash},
+                       'diarization': {'file': 'diarization-provider.json',
+                                      'sha256': hashlib.sha256(diarization_path.read_bytes()).hexdigest()}})
+    return master
 
 
-def transcribe_assemblyai(media, language, config, existing_id=None, on_job_id=None):
+def _diarization_worker(audio, output):
+    os.environ['PYANNOTE_METRICS_ENABLED'] = '0'
+    os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
+    os.environ['MPLCONFIGDIR'] = str(output.parent / 'matplotlib-cache')
+    import soundfile as sf
+    import torch
+    from huggingface_hub import get_token
+    from pyannote.audio import Pipeline
+    token = get_token()
+    if not token:
+        raise ValueError('自動話者分離のモデル認証を設定してください')
+    model = 'pyannote/speaker-diarization-community-1'
+    revision = '3533c8cf8e369892e6b79ff1bf80f7b0286a54ee'
+    torch.set_num_threads(4)
+    pipeline = Pipeline.from_pretrained(model, revision=revision, token=token)
+    waveform, sample_rate = sf.read(audio, dtype='float32', always_2d=True)
+    result = pipeline({'waveform': torch.from_numpy(waveform.T.copy()), 'sample_rate': sample_rate})
+    def turns(annotation):
+        return [{'start': turn.start, 'end': turn.end, 'speaker': speaker}
+                for turn, _, speaker in annotation.itertracks(yield_label=True)]
+    value = {'segments': turns(result.speaker_diarization),
+             'exclusive_segments': turns(result.exclusive_speaker_diarization),
+             'metadata': {'model': model, 'revision': revision, 'speaker_count_constraint': None,
+                          'device': 'cpu', 'audio_sha256': hashlib.sha256(audio.read_bytes()).hexdigest()}}
+    _save_raw(output.parent, output.name, value)
+
+
+def transcribe_assemblyai(media, language, config, existing_id=None, on_job_id=None, *, artifact_dir=None):
     key, model = config['key'], config['model']
     if existing_id:
         job = {'id': existing_id}
     else:
-        ffmpeg = config.get('ffmpeg') or shutil.which('ffmpeg')
+        ffmpeg = _ffmpeg(config.get('ffmpeg'))
         if not ffmpeg: raise ValueError('ffmpeg が見つかりません')
         with tempfile.TemporaryDirectory(prefix='transcript-audio-') as temporary:
             audio = Path(temporary) / 'audio.mp3'
@@ -155,6 +263,10 @@ def transcribe_assemblyai(media, language, config, existing_id=None, on_job_id=N
         if job.get('status') not in ('completed', 'error'): time.sleep(3)
     if job.get('status') != 'completed':
         raise ValueError('AssemblyAI 文字起こし失敗: ' + str(job.get('error') or job.get('id')))
+    raw_hash = None
+    if artifact_dir is not None:
+        Path(artifact_dir).mkdir(parents=True, exist_ok=True)
+        raw_hash = _save_raw(artifact_dir, 'assemblyai-provider.json', job)
     words = [dict(w, start=w['start'] / 1000, end=w['end'] / 1000) for w in job.get('words', [])]
     turns = job.get('utterances') or []
     for word in words:
@@ -167,7 +279,11 @@ def transcribe_assemblyai(media, language, config, existing_id=None, on_job_id=N
                 if overlap > 0: word['speaker'] = speaker
     detected = job.get('language_code') or ''
     code = language if language != '??-??' else '??-??'
-    return _timed_master(words, media, code, 'AssemblyAI:' + str(job['id']))
+    master = _timed_master(words, media, code, 'AssemblyAI:' + str(job['id']))
+    master['provenance'].update(built_in_premiere_asr=False, provider_detected_language=detected)
+    if raw_hash:
+        master['provenance']['raw_artifacts'] = {'assemblyai': {'file': 'assemblyai-provider.json', 'sha256': raw_hash}}
+    return master
 
 
 def extract_reference(path):
@@ -243,8 +359,11 @@ def suggestions(master, documents, display_text):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 5 or sys.argv[1] != '--mlx-worker':
-        raise SystemExit('usage: workflow_backend.py --mlx-worker MEDIA LANGUAGE OUTPUT')
-    _, _, media_name, language_code, output_name = sys.argv
-    result = _transcribe_local_worker(Path(media_name), language_code)
-    Path(output_name).write_text(json.dumps(result, ensure_ascii=False, allow_nan=False), encoding='utf-8')
+    if len(sys.argv) == 4 and sys.argv[1] == '--diarization-worker':
+        _diarization_worker(Path(sys.argv[2]), Path(sys.argv[3]))
+    elif len(sys.argv) == 6 and sys.argv[1] == '--mlx-worker':
+        _, _, media_name, language_code, output_name, artifact_name = sys.argv
+        result = _transcribe_local_worker(Path(media_name), language_code, Path(artifact_name))
+        Path(output_name).write_text(json.dumps(result, ensure_ascii=False, allow_nan=False), encoding='utf-8')
+    else:
+        raise SystemExit('usage: workflow_backend.py --mlx-worker MEDIA LANGUAGE OUTPUT ARTIFACTS')
