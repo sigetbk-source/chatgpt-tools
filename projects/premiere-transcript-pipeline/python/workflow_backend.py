@@ -57,9 +57,9 @@ def _diarization_ready(runtime):
         return False, False
 
 
-def engine_availability(aai_config):
-    installed, credential = _diarization_ready(_diarization_python())
-    ready = _local_whisper_installed() and installed and credential
+def engine_availability(aai_config, *, check_local=True):
+    installed, credential = _diarization_ready(_diarization_python()) if check_local else (False, False)
+    ready = _local_whisper_installed() and installed and credential if check_local else False
     local = {'available': ready,
              'reason': 'ローカルWhisperと自動話者分離を使用します。初回はモデル取得が必要な場合があります' if ready
                        else 'mlx_whisper、pyannote実行環境、モデル利用承認済みのHugging Face認証が必要です',

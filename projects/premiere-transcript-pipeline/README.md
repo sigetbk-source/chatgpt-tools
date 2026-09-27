@@ -39,6 +39,7 @@ Premiere Pro の内蔵文字起こし・話者分離を入力の正本にせず�
 
 ## 文書
 
+- [docs/multi-iso-review.md](docs/multi-iso-review.md): 既知話者3 ISOの2分テスト、証拠付き統合、ブラウザ確認
 - [docs/workflow-automation.md](docs/workflow-automation.md): 日本語／多言語の入口、エンジン選択、資料訂正、翻訳、UXP反映をつなぐ操作設計と検証範囲
 - [docs/multilingual-review.md](docs/multilingual-review.md): 多言語素材の原語・発話言語・日本語参考訳・併記SRT確認
 - [docs/bilingual-srt-layout.md](docs/bilingual-srt-layout.md): SRTの明示改行・対訳ページ分割とPremiereの下寄せ設定による文字欠け防止。静止画・動画は生成しない。

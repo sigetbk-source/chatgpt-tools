@@ -17,3 +17,9 @@ dialog{width:min(560px,92vw);padding:0;color:#eef1f3;background:#171a1d;border:1
 .path-fallback summary { cursor:pointer; }
 .path-fallback label { margin-top:10px; }
 #workspace-location { overflow-wrap:anywhere; }
+.iso-details { margin-top:12px;padding:10px 12px;border:1px solid #40514d;border-radius:8px; }
+.iso-details summary { cursor:pointer;color:#91dfc3;font-weight:600; }
+.iso-evidence { display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:2px 14px;margin-top:8px; }
+.iso-evidence p,.iso-corrections p { margin:5px 0;overflow-wrap:anywhere;font-size:12px;line-height:1.5; }
+.iso-corrections { border-top:1px solid #40514d;margin-top:8px;padding-top:8px; }
+.iso-corrections button { margin-left:8px; }

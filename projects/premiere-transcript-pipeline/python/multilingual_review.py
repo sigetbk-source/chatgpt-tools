@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Local multilingual transcript review. Source media and input master stay read-only."""
-import argparse, fcntl, getpass, hashlib, html, json, math, mimetypes, os, secrets, shutil, subprocess, tempfile, threading, time, unicodedata, uuid
+import argparse, fcntl, getpass, hashlib, html, json, math, mimetypes, os, re, secrets, shutil, subprocess, tempfile, threading, time, unicodedata, uuid
 from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -192,6 +192,11 @@ class Workspace:
             self.state['japanese_url']=japanese_url
             atomic_json(self.path,self.state)
         if self.state['master']: self.state['master']=normalize(self.state['master'])
+        if self.state['master'] and self.state['master'].get('provenance',{}).get('multi_iso'):
+            for source_item in self.state['master']['provenance'].get('sources',[]):
+                clip=Path(source_item['clip']).resolve(strict=True)
+                if media_identity(clip)!=source_item['clip_identity']:
+                    raise ValueError('ISO review clip identity changed')
         self.state.setdefault('workflow',{'mode':'multilingual','engine':None,'stage':'review' if self.state['master'] else 'setup',
             'status':'確認できます' if self.state['master'] else '素材とエンジンを選んでください','job':None,'language':'??-??',
             'output':{'srt_status':'not_exported','json_status':'not_exported','premiere_status':'not_applied'}})
@@ -324,6 +329,25 @@ class Workspace:
             result=self._save_workflow(state)
             threading.Thread(target=self._run_initial_asr,args=(engine,self.media,workflow['language'],deepcopy(self.aai_config),remote_id,submitted),daemon=True).start()
             return result
+        if route=='/api/references/iso-adopt':
+            index=p.get('segment_index'); correction_index=p.get('correction_index')
+            if not state['master'] or type(index) is not int or not 0<=index<len(state['master']['utterances']):
+                raise ValueError('対象発言が不正です')
+            u=state['master']['utterances'][index]
+            corrections=u.get('reference_corrections',[])
+            if type(correction_index) is not int or not 0<=correction_index<len(corrections):
+                raise ValueError('資料候補が不正です')
+            candidate=corrections[correction_index]
+            if candidate.get('status')!='candidate' or display_text(u)!=candidate['before'] or p.get('current_text')!=candidate['before']:
+                raise Conflict('資料候補の作成後に原文が変わりました')
+            state['history'].append(deepcopy(state['master'])); state['future']=[]
+            u['text_override']=candidate['candidate']; u['alignment_status']='unresolved'
+            if u['translation'].get('text'): u['translation']['status']='stale'
+            candidate['adopted']=True; candidate['status']='adopted'
+            for other in corrections:
+                if other is not candidate and other['status']=='candidate': other['status']='stale'
+            self._invalidate_output(state)
+            return self._save_workflow(state)
         if route=='/api/references/load':
             paths=p.get('paths')
             if not isinstance(paths,list) or not 1<=len(paths)<=20: raise ValueError('参照資料を1〜20件選択してください')
@@ -342,7 +366,20 @@ class Workspace:
             return self._save_workflow(state)
         if route=='/api/references/suggest':
             if not state['master']: raise ValueError('先に文字起こしを実行してください')
-            state['references']['suggestions']=suggestions(state['master'],state['references']['documents'],display_text)
+            if state['master'].get('provenance',{}).get('multi_iso'):
+                rows=[]
+                for index,u in enumerate(state['master']['utterances']):
+                    current=display_text(u)
+                    for correction in u.get('reference_corrections',[]):
+                        if correction.get('status')!='candidate' or correction.get('before')!=current: continue
+                        rows.append({'id':hashlib.sha256(f'{index}:{correction["candidate"]}'.encode()).hexdigest()[:24],
+                            'segment_index':index,'base_text':current,'candidate_text':correction['candidate'],
+                            'from':correction.get('matched_term',''),'to':correction['candidate'],
+                            'source_name':correction['source_name'],'evidence':correction['evidence'],
+                            'source_line':correction['source_line'],'status':'candidate'})
+                state['references']['suggestions']=rows
+            else:
+                state['references']['suggestions']=suggestions(state['master'],state['references']['documents'],display_text)
             return self._save_workflow(state)
         if route=='/api/references/adopt':
             if not state['master']: raise ValueError('文字起こしがありません')
@@ -351,10 +388,10 @@ class Workspace:
             candidate=next((x for x in state['references']['suggestions'] if x['id']==p.get('suggestion_id') and x['segment_index']==index),None)
             if not candidate or candidate['status']!='candidate': raise ValueError('候補が見つかりません')
             u=state['master']['utterances'][index]; current=display_text(u)
-            if current!=candidate['base_text'] or current!=p.get('current_text') or candidate['from'] not in current:
+            if current!=candidate['base_text'] or current!=p.get('current_text') or (not candidate.get('candidate_text') and candidate['from'] not in current):
                 raise Conflict('候補作成後に本文が変わりました。再提案してください')
             state['history'].append(deepcopy(state['master'])); state['future']=[]
-            u['text_override']=current.replace(candidate['from'],candidate['to']); u['alignment_status']='unresolved'
+            u['text_override']=candidate.get('candidate_text') or current.replace(candidate['from'],candidate['to']); u['alignment_status']='unresolved'
             if u['translation'].get('text'): u['translation']['status']='stale'
             candidate['status']='adopted'
             for other in state['references']['suggestions']:
@@ -431,10 +468,15 @@ class Workspace:
                     'translation_fingerprint':translation_fingerprint(m,i),
                     'text_language_suggestion':suggestion,'language_mismatch':bool(suggestion and u.get('language_source')=='manual' and suggestion['language']!=u.get('language')),
                     'translation':u['translation'],'alignment_status':u['alignment_status'],'retry_candidates':candidates,
-                    'srt_pages':deepcopy(u.get('srt_pages',[]))})
+                    'srt_pages':deepcopy(u.get('srt_pages',[])),
+                    'iso_evidence':deepcopy({key:u.get(key) for key in (
+                        'source_iso','source_iso_speaker','raw_asr_text','speaker_confidence',
+                        'speaker_scores','speaker_evidence','ambiguous','overlap',
+                        'duplicate_candidates','aai_speaker','aai_confidence','detected_language',
+                        'reference_corrections','speaker_label_source','selection_note') if key in u})})
             workflow=deepcopy(self.state['workflow']); workflow['media_path']=str(self.media) if self.media else None
             workflow['workspace_path']=str(self.root)
-            workflow['engines']=engine_availability(self.aai_config)
+            workflow['engines']=engine_availability(self.aai_config,check_local=not bool(m and m.get('provenance',{}).get('multi_iso')))
             workflow['premiere']={'available':bool(self.premiere_ipc_root and (Path(self.premiere_ipc_root)/'inbox').is_dir() and
                 (Path(self.premiere_ipc_root)/'outbox').is_dir()),
                 'srt_track_placement':bool(self.premiere_ipc_root and (Path(self.premiere_ipc_root)/'caption-inbox').is_dir() and
@@ -446,6 +488,7 @@ class Workspace:
                 'workflow':workflow,'references':deepcopy(self.state['references']),'source_media_name':self.media.name if self.media else '',
                 'has_media':bool(self.media),'has_video':bool(self.media and self.media.suffix.lower() in ('.mov','.mp4','.m4v','.webm')),
                 'items':items,'speaker_options':[s['name'] for s in m['speakers']] if m else [], 'speakers':deepcopy(m['speakers']) if m else [],
+                'multi_iso_interval':deepcopy(m.get('provenance',{}).get('interval')) if m and m.get('provenance',{}).get('multi_iso') else None,
                 'language_options':LANGUAGES,'revision':self.state['revision'],'token':self.token,
                 'can_undo':bool(self.state['history']),'can_redo':bool(self.state['future']),'japanese_url':self.state.get('japanese_url'),
                 'providers':{'saved_assemblyai':bool(self.state.get('aai_response')),
@@ -526,6 +569,7 @@ class Workspace:
                     keys=[x['key'] for x in state['master']['speakers'] if x['name']==p.get('speaker_name')]
                     if len(keys)!=1: raise ValueError('select an existing speaker')
                     state['master']=edit(state['master'],'assign',i,keys[0])
+                    state['master']['utterances'][i]['speaker_label_source']='manual'
                 elif route=='/api/speaker/rename':
                     name=str(p.get('name','')).strip()
                     if not name: raise ValueError('speaker name is required')
@@ -755,7 +799,15 @@ def make_server(workspace,port=8892):
             if not self.trusted(): return
             route=urlsplit(self.path).path
             if route=='/api/project': self.reply(200,workspace.project()); return
-            media=route=='/media'; name={'/':'index.html','/app.js':'app.js','/styles.css':'styles.css'}.get(route); path=workspace.media if media else static/name if name else None
+            media=route=='/media' or route.startswith('/media/iso/'); name={'/':'index.html','/app.js':'app.js','/styles.css':'styles.css'}.get(route)
+            path=workspace.media if route=='/media' else None
+            if route.startswith('/media/iso/') and workspace.state.get('master'):
+                key=route[len('/media/iso/'):]
+                if re.fullmatch(r'[A-Za-z0-9_-]+',key):
+                    item=next((x for x in workspace.state['master'].get('provenance',{}).get('sources',[])
+                               if x.get('speaker_id')==key),None)
+                    if item: path=Path(item['clip']).resolve()
+            if path is None and name: path=static/name
             if not path or not path.is_file(): self.reply(404,{'error':'not found'}); return
             size=path.stat().st_size; start,end=0,size-1; range_header=self.headers.get('Range') if media else None
             if range_header:
