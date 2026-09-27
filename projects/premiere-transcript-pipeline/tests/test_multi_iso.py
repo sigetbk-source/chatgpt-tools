@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'python'))
 from multi_iso import (DEFAULTS, analyze, build_master, duplicate_groups, frame_levels,
                        explicit_reference_candidates, contextual_reference_candidates,
                        preserve_manual_speaker_edits, score_utterance, volume_evidence)
-from multilingual_review import Workspace
+from multilingual_review import Workspace, display_text
 
 
 def audio(levels=(0.8, 0.1, 0.03), seconds=3, sr=16000):
@@ -113,6 +113,7 @@ class MultiISOTests(unittest.TestCase):
         self.assertEqual(utterance['raw_asr_text'], 'Amazon Ad')
         self.assertEqual(utterance['words'][0]['start'], .2)
         self.assertEqual(utterance['reference_corrections'][0]['candidate'], 'Amazon Ads')
+        self.assertEqual(utterance['reference_corrections'][0]['before'], display_text(utterance))
         self.assertFalse(utterance['reference_corrections'][0]['adopted'])
         self.assertEqual(len(docs), 1)
 
@@ -153,6 +154,30 @@ class MultiISOTests(unittest.TestCase):
             reopened = Workspace(source, Path(tmp) / 'review')
             self.assertEqual(reopened.project()['items'][0]['speaker_name'], 'ステファン')
             reopened.close()
+
+    def test_reference_adoption_retains_raw_asr_and_utterance_times(self):
+        master = {'schema': 'bk-master-transcript/v0.1', 'source_id': 'test', 'language': 'en-us',
+                  'provenance': {'multi_iso': True, 'interval': {'start_tc': '13:32:51', 'duration_seconds': 120}},
+                  'speakers': [{'key': 'host', 'name': '田中'}],
+                  'utterances': [{'speaker': 'host', 'language': 'en-us', 'raw_asr_text': 'market er',
+                      'review_envelope': {'start': 4.2, 'end': 5.9},
+                      'words': [{'text': 'market er', 'start': 4.2, 'end': 5.9, 'confidence': .9, 'eos': True}],
+                      'reference_corrections': [{'before': 'market er', 'candidate': 'marketer',
+                          'source_name': 'dictionary.md', 'evidence': 'marketer', 'matched_term': 'market er',
+                          'adopted': False, 'status': 'candidate'}]}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'master.json'; source.write_text(json.dumps(master))
+            work = Workspace(source, Path(tmp) / 'review')
+            work.mutate('/api/references/iso-adopt', {'revision': 0, 'segment_index': 0,
+                        'correction_index': 0, 'current_text': 'market er'})
+            changed = work.state['master']['utterances'][0]
+            self.assertEqual(changed['raw_asr_text'], 'market er')
+            self.assertEqual(changed['review_envelope'], {'start': 4.2, 'end': 5.9})
+            self.assertEqual(changed['words'][0]['start'], 4.2)
+            self.assertEqual(changed['text_override'], 'marketer')
+            self.assertEqual(changed['alignment_status'], 'unresolved')
+            self.assertTrue(changed['reference_corrections'][0]['adopted'])
+            work.close()
 
 
 if __name__ == '__main__':

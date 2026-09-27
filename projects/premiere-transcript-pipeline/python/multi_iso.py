@@ -185,16 +185,10 @@ def text_language(text, detected):
 
 
 def displayed_words(words):
-    result = []
-    for index, word in enumerate(words):
-        text = word['text'].strip()
-        if index and text and result:
-            last = result[-1].rstrip()
-            if (last and last[-1].isascii() and (last[-1].isalnum() or last[-1] in ',.!?;:')
-                    and text[0].isascii() and text[0].isalnum()):
-                text = ' ' + text
-        result.append(text)
-    return ''.join(result)
+    # Match the existing review screen exactly, including its handling of
+    # Japanese spacing; candidate.before must equal the editable UI text.
+    from multilingual_review import display_word_texts
+    return ''.join(display_word_texts({'words': words}))
 
 
 def explicit_reference_candidates(text, documents):
@@ -245,6 +239,8 @@ def contextual_reference_candidates(text, documents, existing):
                 continue
             for token_match in tokens:
                 token = token_match.group()
+                if token_match.start() and text[token_match.start() - 1].isascii() and text[token_match.start() - 1].isalnum():
+                    continue
                 following = re.match(r'\s+([A-Za-z]{1,8})\b', text[token_match.end():])
                 if following and (token + following.group(1)).casefold() == target.casefold():
                     continue

@@ -201,6 +201,20 @@ class Workspace:
             'status':'確認できます' if self.state['master'] else '素材とエンジンを選んでください','job':None,'language':'??-??',
             'output':{'srt_status':'not_exported','json_status':'not_exported','premiere_status':'not_applied'}})
         self.state.setdefault('references',{'documents':[],'suggestions':[]})
+        if self.state['master'] and self.state['master'].get('provenance',{}).get('multi_iso'):
+            reconciled=False
+            for suggestion in self.state['references']['suggestions']:
+                if suggestion.get('status')!='adopted' or not suggestion.get('candidate_text'): continue
+                index=suggestion.get('segment_index')
+                if type(index) is not int or not 0<=index<len(self.state['master']['utterances']): continue
+                for correction in self.state['master']['utterances'][index].get('reference_corrections',[]):
+                    if correction.get('candidate')==suggestion['candidate_text'] and not correction.get('adopted'):
+                        correction['adopted']=True; correction['status']='adopted'; reconciled=True
+                u=self.state['master']['utterances'][index]
+                if u.get('text_override')==suggestion['candidate_text'] and u.get('translation',{}).get('provider')=='source-copy' and u['translation'].get('text')!=suggestion['candidate_text']:
+                    u['translation'].update({'text':suggestion['candidate_text'],'status':'ready','source_text':suggestion['candidate_text']})
+                    reconciled=True
+            if reconciled: atomic_json(self.path,self.state)
         if self.state['workflow']['stage']=='transcribing':
             job=self.state['workflow'].get('job') or {}
             submitted=job.get('submitted_media_identity')
@@ -342,7 +356,9 @@ class Workspace:
                 raise Conflict('資料候補の作成後に原文が変わりました')
             state['history'].append(deepcopy(state['master'])); state['future']=[]
             u['text_override']=candidate['candidate']; u['alignment_status']='unresolved'
-            if u['translation'].get('text'): u['translation']['status']='stale'
+            if u['translation'].get('provider')=='source-copy':
+                u['translation'].update({'text':candidate['candidate'],'status':'ready','source_text':candidate['candidate']})
+            elif u['translation'].get('text'): u['translation']['status']='stale'
             candidate['adopted']=True; candidate['status']='adopted'
             for other in corrections:
                 if other is not candidate and other['status']=='candidate': other['status']='stale'
@@ -392,8 +408,15 @@ class Workspace:
                 raise Conflict('候補作成後に本文が変わりました。再提案してください')
             state['history'].append(deepcopy(state['master'])); state['future']=[]
             u['text_override']=candidate.get('candidate_text') or current.replace(candidate['from'],candidate['to']); u['alignment_status']='unresolved'
-            if u['translation'].get('text'): u['translation']['status']='stale'
+            if u['translation'].get('provider')=='source-copy':
+                u['translation'].update({'text':u['text_override'],'status':'ready','source_text':u['text_override']})
+            elif u['translation'].get('text'): u['translation']['status']='stale'
             candidate['status']='adopted'
+            for correction in u.get('reference_corrections',[]):
+                if correction.get('candidate')==u['text_override']:
+                    correction['adopted']=True; correction['status']='adopted'
+                elif correction.get('status')=='candidate':
+                    correction['status']='stale'
             for other in state['references']['suggestions']:
                 if other['segment_index']==index and other['id']!=candidate['id']: other['status']='stale'
             self._invalidate_output(state)
