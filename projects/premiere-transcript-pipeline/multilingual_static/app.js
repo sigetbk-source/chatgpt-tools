@@ -11,22 +11,28 @@ function isoTime(seconds){
  const parts=start.split(':').map(Number),total=parts[0]*3600+parts[1]*60+parts[2]+seconds;
  return `${String(Math.floor(total/3600)).padStart(2,'0')}:${String(Math.floor(total/60)%60).padStart(2,'0')}:${(total%60).toFixed(3).padStart(6,'0')}`;
 }
+function renderReferenceProposal(target,before,candidate){
+ const original=Array.from(before||''),proposed=Array.from(candidate||'');let start=0,oldEnd=original.length,newEnd=proposed.length;
+ while(start<oldEnd&&start<newEnd&&original[start]===proposed[start])start++;
+ while(oldEnd>start&&newEnd>start&&original[oldEnd-1]===proposed[newEnd-1]){oldEnd--;newEnd--}
+ target.append(document.createTextNode(proposed.slice(0,start).join('')));
+ if(newEnd>start){const mark=document.createElement('mark');mark.textContent=proposed.slice(start,newEnd).join('');target.append(mark)}
+ target.append(document.createTextNode(proposed.slice(newEnd).join('')));
+}
 function renderReferenceCandidates(card,row){
  const corrections=row.iso_evidence?.reference_corrections||[];
  if(!corrections.length)return;
  const section=card.querySelector('.reference-review');section.hidden=false;
  const list=card.querySelector('.reference-candidates');list.replaceChildren();
  for(const [index,item] of corrections.entries()){
- const entry=document.createElement('div');entry.className='reference-candidate';
-  const change=document.createElement('p');change.className='reference-change';change.textContent=item.evidence||item.candidate||'補正候補';entry.append(change);
-  const comparison=document.createElement('div');comparison.className='reference-comparison';
-  const before=document.createElement('p');before.append(Object.assign(document.createElement('strong'),{textContent:'補正前'}),document.createTextNode(item.before||''));
-  const after=document.createElement('p');after.append(Object.assign(document.createElement('strong'),{textContent:'補正候補'}),document.createTextNode(item.candidate||''));
-  comparison.append(before,after);
+  const entry=document.createElement('div');entry.className='reference-candidate';
+  const title=document.createElement('h3');title.textContent='修正後本文';entry.append(title);
+  const proposal=document.createElement('p');proposal.className='reference-proposal';renderReferenceProposal(proposal,item.before,item.candidate);entry.append(proposal);
+  const change=document.createElement('p');change.className='reference-change';change.textContent=`変更点: ${item.evidence||'全文を比較してください'}`;entry.append(change);
   const source=document.createElement('p');source.className='reference-source';source.textContent=`参照: ${item.source_name||'不明'}`;entry.append(source);
   const status=document.createElement('p');status.className='reference-status';status.textContent=item.adopted?'採用済み':item.status==='candidate'?'未採用・候補':'保留';entry.append(status);
   if(item.status==='candidate'){const button=document.createElement('button');button.textContent='この補正候補を採用';button.onclick=()=>{if(drafts.size){note('未保存の原文または訳を保存してから資料補正を採用してください。',true);return}op('/api/references/iso-adopt',{segment_index:row.segment_index,correction_index:index,current_text:row.text})};entry.append(button)}
-  const full=document.createElement('details');full.className='reference-full';const summary=document.createElement('summary');summary.textContent='補正前と候補の全文を見る';full.append(summary,comparison);entry.append(full);
+  const full=document.createElement('details');full.className='reference-full';const summary=document.createElement('summary');summary.textContent='補正前の全文を見る';const before=document.createElement('p');before.className='reference-before';before.textContent=item.before||'';full.append(summary,before);entry.append(full);
   list.append(entry);
  }
 }
