@@ -10,6 +10,23 @@ def fixture():
             {'text':'Hallo','start':1.0,'end':1.5},{'text':' Welt','start':1.5,'end':2.0}]}]}
 
 class MultilingualReviewTest(unittest.TestCase):
+    def test_split_uses_exact_caret_boundary_and_keeps_word_times(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); master=root/'input.json'; master.write_text(json.dumps(fixture()),encoding='utf-8')
+            work=Workspace(master,root/'work')
+            row=work.project()['items'][0]
+            self.assertEqual(row['word_boundaries'],[5])
+            payload={'revision':0,'segment_index':0,'current_text':'Hallo Welt'}
+            with self.assertRaisesRegex(ValueError,'exact word boundary'):
+                work.mutate('/api/split',{**payload,'caret':4})
+            self.assertEqual(work.state['revision'],0)
+            work.mutate('/api/split',{**payload,'caret':5})
+            rows=work.project()['items']
+            self.assertEqual([row['text'] for row in rows],['Hallo','Welt'])
+            self.assertEqual([(row['start_seconds'],row['end_seconds']) for row in rows],[(1.0,1.5),(1.5,2.0)])
+            self.assertEqual([row['speaker_name'] for row in rows],['A','A'])
+            work.close()
+
     def test_legacy_leading_space_candidate_can_be_adopted_only_with_matching_context(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder); master=root/'input.json'; value=fixture()
