@@ -179,6 +179,37 @@ class MultiISOTests(unittest.TestCase):
             self.assertTrue(changed['reference_corrections'][0]['adopted'])
             work.close()
 
+    def test_second_reference_candidate_uses_current_corrected_text(self):
+        master = {'schema': 'bk-master-transcript/v0.1', 'source_id': 'test', 'language': 'en-us',
+                  'provenance': {'multi_iso': True, 'interval': {'start_tc': '13:32:51', 'duration_seconds': 120}},
+                  'speakers': [{'key': 'host', 'name': '田中'}],
+                  'utterances': [{'speaker': 'host', 'language': 'en-us',
+                      'raw_asr_text': 'And Questions Amazon Ad',
+                      'review_envelope': {'start': 4.2, 'end': 5.9},
+                      'words': [{'text': 'And Questions Amazon Ad', 'start': 4.2, 'end': 5.9,
+                                 'confidence': .9, 'eos': True}]}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'master.json'; source.write_text(json.dumps(master))
+            terms = root / 'terms.md'; terms.write_text('AndQuestions → &questions\nAmazon Ad → Amazon Ads\n')
+            work = Workspace(source, root / 'review')
+            work.mutate('/api/references/load', {'revision': 0, 'paths': [str(terms)]})
+            work.mutate('/api/references/suggest', {'revision': 1})
+            first = next(x for x in work.state['references']['suggestions'] if '&questions' in x['candidate_text'])
+            work.mutate('/api/references/adopt', {'revision': 2, 'segment_index': 0,
+                        'suggestion_id': first['id'], 'current_text': 'And Questions Amazon Ad'})
+            work.mutate('/api/references/suggest', {'revision': 3})
+            second = next(x for x in work.state['references']['suggestions'] if 'Amazon Ads' in x['candidate_text'])
+            self.assertEqual(second['base_text'], '&questions Amazon Ad')
+            work.mutate('/api/references/adopt', {'revision': 4, 'segment_index': 0,
+                        'suggestion_id': second['id'], 'current_text': second['base_text']})
+            changed = work.state['master']['utterances'][0]
+            self.assertEqual(changed['text_override'], '&questions Amazon Ads')
+            self.assertEqual(changed['review_envelope'], {'start': 4.2, 'end': 5.9})
+            self.assertEqual(changed['raw_asr_text'], 'And Questions Amazon Ad')
+            self.assertEqual(sum(x['adopted'] for x in changed['reference_corrections']), 2)
+            work.close()
+
 
 if __name__ == '__main__':
     unittest.main()

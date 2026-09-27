@@ -383,16 +383,23 @@ class Workspace:
         if route=='/api/references/suggest':
             if not state['master']: raise ValueError('先に文字起こしを実行してください')
             if state['master'].get('provenance',{}).get('multi_iso'):
+                from multi_iso import explicit_reference_candidates, contextual_reference_candidates
+                documents=[]
+                for stored in state['references']['documents']:
+                    path=Path(stored['path']).resolve(strict=True)
+                    if hashlib.sha256(path.read_bytes()).hexdigest()!=stored['sha256']:
+                        raise Conflict('参照資料の内容が読み込み時から変わりました。読み込み直してください')
+                    documents.append({**stored,'text':extract_reference(path)})
                 rows=[]
                 for index,u in enumerate(state['master']['utterances']):
                     current=display_text(u)
-                    for correction in u.get('reference_corrections',[]):
-                        if correction.get('status')!='candidate' or correction.get('before')!=current: continue
+                    explicit=explicit_reference_candidates(current,documents)
+                    for correction in explicit+contextual_reference_candidates(current,documents,explicit):
                         rows.append({'id':hashlib.sha256(f'{index}:{correction["candidate"]}'.encode()).hexdigest()[:24],
                             'segment_index':index,'base_text':current,'candidate_text':correction['candidate'],
                             'from':correction.get('matched_term',''),'to':correction['candidate'],
                             'source_name':correction['source_name'],'evidence':correction['evidence'],
-                            'source_line':correction['source_line'],'status':'candidate'})
+                            'source_line':correction['source_line'],'correction':correction,'status':'candidate'})
                 state['references']['suggestions']=rows
             else:
                 state['references']['suggestions']=suggestions(state['master'],state['references']['documents'],display_text)
@@ -412,11 +419,14 @@ class Workspace:
                 u['translation'].update({'text':u['text_override'],'status':'ready','source_text':u['text_override']})
             elif u['translation'].get('text'): u['translation']['status']='stale'
             candidate['status']='adopted'
+            matched_correction=False
             for correction in u.get('reference_corrections',[]):
                 if correction.get('candidate')==u['text_override']:
-                    correction['adopted']=True; correction['status']='adopted'
+                    correction['adopted']=True; correction['status']='adopted'; matched_correction=True
                 elif correction.get('status')=='candidate':
                     correction['status']='stale'
+            if not matched_correction and candidate.get('correction'):
+                u.setdefault('reference_corrections',[]).append({**candidate['correction'],'adopted':True,'status':'adopted'})
             for other in state['references']['suggestions']:
                 if other['segment_index']==index and other['id']!=candidate['id']: other['status']='stale'
             self._invalidate_output(state)
