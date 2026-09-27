@@ -30,6 +30,7 @@ DEFAULTS = {
     'overlap_max_margin_db': 6.0, 'active_dbfs': -35.0,
     'weights': {'iso_prior': 0.27, 'volume': 0.48, 'aai_confidence': 0.08, 'frequency': 0.17},
     'duplicate_time_fraction': 0.55, 'duplicate_text_similarity': 0.72,
+    'echo_volume_margin_db': 3.0, 'echo_text_similarity': 0.8, 'echo_min_characters': 12,
 }
 
 
@@ -468,6 +469,55 @@ def suppress_clear_leakage(rows):
     return rows
 
 
+def suppress_louder_owner_echoes(rows, config=DEFAULTS):
+    """Suppress a quiet ISO's matching copy when the louder owner's ISO retains it.
+
+    Provider rows remain in candidates.json with the exact audio and text
+    evidence. Short acknowledgements and possible simultaneous speech stay.
+    """
+    owners_by_iso = {key: [other for other in rows if other['source_iso_speaker'] == key and
+                      other['speaker'] == key and other['duplicate_primary']]
+                     for key in ('host', 'guest_en', 'guest_ja')}
+    normalized = lambda value: re.sub(r'[^\w\u3040-\u30ff\u3400-\u9fff]', '', value).casefold()
+    for row in rows:
+        if not row['duplicate_primary'] or row['overlap']:
+            continue
+        volume = row['speaker_evidence']['volume']
+        owner_iso = volume['primary_iso']
+        text = normalized(row['text'])
+        if (owner_iso == row['source_iso_speaker'] or
+                volume['margin_db'] < config['echo_volume_margin_db'] or
+                len(text) < config['echo_min_characters']):
+            continue
+        owners = [owner for owner in owners_by_iso[owner_iso]
+                  if owner is not row and owner['duplicate_primary'] and
+                  owner['start'] < row['end'] and owner['end'] > row['start']]
+        if not owners:
+            continue
+        words = sorted((word for owner in owners for word in owner['words']
+                        if row['start'] - 0.2 <= (word['start'] + word['end']) / 2 <= row['end'] + 0.2),
+                       key=lambda word: word['start'])
+        owner_text = normalized(''.join(word['text'] for word in words))
+        if not owner_text:
+            continue
+        similarity = SequenceMatcher(None, text, owner_text).ratio()
+        if similarity < config['echo_text_similarity']:
+            continue
+        primary = max(owners, key=lambda owner: min(owner['end'], row['end']) - max(owner['start'], row['start']))
+        evidence = {'id': row['id'], 'source_iso_speaker': row['source_iso_speaker'],
+                    'text_similarity': round(similarity, 4),
+                    'volume_margin_db': volume['margin_db'], 'speaker_score': row['speaker_scores']}
+        if not any(item['id'] == row['id'] for item in primary['duplicate_candidates']):
+            primary['duplicate_candidates'].append(evidence)
+        row['duplicate_primary'] = False
+        row['duplicate_of'] = primary['id']
+        row['speaker_evidence']['suppression_reason'] = 'louder_owner_iso_same_words'
+        row['speaker_evidence']['owner_echo'] = {'owner_iso': owner_iso,
+            'owner_candidate_ids': [owner['id'] for owner in owners],
+            'text_similarity': round(similarity, 4), 'volume_margin_db': volume['margin_db']}
+    return rows
+
+
 def build_master(rows, manifest, reference_paths=()):
     """Produce a reviewable master while preserving every provider candidate."""
     names = {x['speaker_id']: x['speaker_name'] for x in manifest['sources']}
@@ -563,7 +613,7 @@ def analyze(provider_jobs, manifest, config=DEFAULTS, reference_paths=(), pyanno
                                                            round(clean['end'] * sample_rate)], sample_rate)
     scored = [score_utterance(row, list(clips), levels, audio, sample_rate, prototypes, config,
                               pyannote_fallback) for row in rows]
-    merged = suppress_clear_leakage(duplicate_groups(scored, config))
+    merged = suppress_clear_leakage(suppress_louder_owner_echoes(duplicate_groups(scored, config), config))
     master, documents = build_master(merged, manifest, reference_paths)
     return {'master': master, 'candidates': merged, 'references': documents,
             'summary': {'raw_utterances': provider_utterance_count, 'refined_candidates': len(rows),

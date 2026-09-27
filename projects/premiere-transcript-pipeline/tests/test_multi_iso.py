@@ -13,7 +13,8 @@ import soundfile as sf
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'python'))
 from multi_iso import (DEFAULTS, analyze, build_master, duplicate_groups, frame_levels,
                        explicit_reference_candidates, contextual_reference_candidates,
-                       preserve_manual_speaker_edits, score_utterance, volume_evidence)
+                       preserve_manual_speaker_edits, score_utterance,
+                       suppress_louder_owner_echoes, volume_evidence)
 from multilingual_review import Workspace, display_text
 
 
@@ -92,6 +93,31 @@ class MultiISOTests(unittest.TestCase):
                              'per_iso': {key: {'dbfs': -12}}}}})
         grouped = duplicate_groups([first, second])
         self.assertTrue(all(x['duplicate_primary'] for x in grouped))
+
+    def test_quiet_iso_echo_is_suppressed_across_different_word_groups(self):
+        owner_first = row('guest_en', 'The important', .2, 1.0)
+        owner_second = row('guest_en', ' question today', 1.0, 2.2)
+        owner_second['id'] = 'guest_en-2'
+        echo = row('guest_ja', 'The important question today', .2, 2.2)
+        for item in (owner_first, owner_second, echo):
+            item.update({'speaker': item['source_iso_speaker'], 'overlap': False,
+                         'duplicate_primary': True, 'duplicate_candidates': [],
+                         'speaker_scores': {'guest_en': .8, 'guest_ja': .6},
+                         'speaker_evidence': {'volume': {'primary_iso': 'guest_en',
+                             'margin_db': 7.0}}})
+        rows = suppress_louder_owner_echoes([owner_first, owner_second, echo])
+        self.assertFalse(rows[2]['duplicate_primary'])
+        self.assertEqual(rows[2]['speaker_evidence']['suppression_reason'], 'louder_owner_iso_same_words')
+        self.assertTrue(any(item['id'] == echo['id'] for owner in (owner_first, owner_second)
+                            for item in owner['duplicate_candidates']))
+        echo['duplicate_primary'] = True
+        echo['text'] = 'A different simultaneous answer'
+        suppress_louder_owner_echoes([owner_first, owner_second, echo])
+        self.assertTrue(echo['duplicate_primary'])
+        echo['text'] = 'The important question today'
+        echo['overlap'] = True
+        suppress_louder_owner_echoes([owner_first, owner_second, echo])
+        self.assertTrue(echo['duplicate_primary'])
 
     def test_master_keeps_iso_and_raw_text_and_timing_under_reference(self):
         item = row()
