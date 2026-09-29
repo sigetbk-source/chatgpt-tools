@@ -1,4 +1,4 @@
-import io, json, sys, tempfile, unittest
+import gzip, io, json, sys, tempfile, unittest, wave
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'python'))
@@ -10,6 +10,48 @@ def fixture():
             {'text':'Hallo','start':1.0,'end':1.5},{'text':' Welt','start':1.5,'end':2.0}]}]}
 
 class MultilingualReviewTest(unittest.TestCase):
+    def test_saving_a_complete_trailing_word_removal_keeps_other_word_times(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); value=fixture()
+            value['utterances'][0]['words']=[
+                {'text':'前です。','start':1.0,'end':1.5},
+                {'text':'そう','start':1.5,'end':1.5},
+                {'text':'ですね。','start':1.5,'end':2.0},
+            ]
+            master=root/'input.json'; master.write_text(json.dumps(value),encoding='utf-8')
+            work=Workspace(master,root/'work')
+            original=json.loads(json.dumps(work.state['master']['utterances'][0]['words'][0]))
+            work.mutate('/api/text',{'revision':0,'segment_index':0,'text':'前です。'})
+            row=work.project()['items'][0]
+            self.assertEqual((row['text'],row['alignment_status'],row['end_seconds']),('前です。','word-timed',1.5))
+            kept=work.state['master']['utterances'][0]['words'][0]
+            self.assertEqual((kept['text'],kept['start'],kept['end']),
+                             (original['text'],original['start'],original['end']))
+            self.assertIsNone(work.state['master']['utterances'][0]['text_override'])
+            work.mutate('/api/undo',{'revision':1})
+            self.assertEqual(work.project()['items'][0]['text'],'前です。そうですね。')
+            work.close()
+
+    def test_history_is_stored_separately_and_legacy_history_migrates_without_losing_undo(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); master=root/'input.json'; master.write_text(json.dumps(fixture()),encoding='utf-8')
+            work=Workspace(master,root/'work')
+            work.mutate('/api/text',{'revision':0,'segment_index':0,'text':'Changed text'})
+            self.assertEqual(work.state['history'][0].keys(),{'snapshot_file'})
+            work.close()
+            state=json.loads((root/'work'/'state.json').read_text(encoding='utf-8'))
+            with gzip.open(root/'work'/'history'/state['history'][0]['snapshot_file'],'rt',encoding='utf-8') as stream:
+                state['history'][0]=json.load(stream)
+            (root/'work'/'state.json').write_text(json.dumps(state),encoding='utf-8')
+            reopened=Workspace(master,root/'work')
+            self.assertTrue((root/'work'/'state.pre-history-migration.json').exists())
+            self.assertEqual(reopened.state['history'][0].keys(),{'snapshot_file'})
+            reopened.mutate('/api/undo',{'revision':1})
+            self.assertEqual(reopened.project()['items'][0]['text'],'Hallo Welt')
+            reopened.mutate('/api/redo',{'revision':2})
+            self.assertEqual(reopened.project()['items'][0]['text'],'Changed text')
+            reopened.close()
+
     def test_split_uses_exact_caret_boundary_and_keeps_word_times(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder); master=root/'input.json'; master.write_text(json.dumps(fixture()),encoding='utf-8')
@@ -25,6 +67,119 @@ class MultilingualReviewTest(unittest.TestCase):
             self.assertEqual([row['text'] for row in rows],['Hallo','Welt'])
             self.assertEqual([(row['start_seconds'],row['end_seconds']) for row in rows],[(1.0,1.5),(1.5,2.0)])
             self.assertEqual([row['speaker_name'] for row in rows],['A','A'])
+            work.close()
+
+    def test_overlap_split_does_not_block_later_exact_split_or_speaker_change(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); value=fixture()
+            value['utterances']=[
+                {'speaker':'a','words':[{'text':'One','start':1.0,'end':1.5},
+                                        {'text':' two','start':3.0,'end':3.5},
+                                        {'text':' three','start':4.0,'end':4.5}]},
+                {'speaker':'a','words':[{'text':'Overlap','start':2.0,'end':2.5}]},
+                {'speaker':'a','words':[{'text':'Later','start':10.0,'end':10.5},
+                                        {'text':' words','start':10.5,'end':11.0}]}]
+            value['speakers'].append({'key':'b','name':'B'})
+            master=root/'input.json'; master.write_text(json.dumps(value),encoding='utf-8')
+            work=Workspace(master,root/'work')
+            row=work.project()['items'][0]
+            work.mutate('/api/split/unaligned',{'revision':0,'segment_index':0,
+                'current_text':row['text'],'expected_fingerprint':row['retry_fingerprint'],
+                'left_text':'One','right_text':' two three','requested_time':3.0})
+            self.assertGreater(work.project()['items'][1]['start_seconds'],work.project()['items'][2]['start_seconds'])
+            row=work.project()['items'][3]
+            work.mutate('/api/split',{'revision':1,'segment_index':3,'current_text':row['text'],
+                'caret':row['word_boundaries'][0]})
+            self.assertEqual([item['text'] for item in work.project()['items'][3:5]],['Later','words'])
+            work.mutate('/api/speaker',{'revision':2,'segment_index':4,'speaker_name':'B'})
+            self.assertEqual(work.project()['items'][4]['speaker_name'],'B')
+            work.close()
+
+    def test_corrected_text_can_split_before_word_alignment(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); value=fixture(); utterance=value['utterances'][0]
+            utterance['text_override']='こんにちは。さようなら。'; utterance['alignment_status']='unresolved'
+            utterance['translation']={'text':'Hello. Goodbye.','status':'ready','provider':'manual'}
+            utterance['reference_corrections']=[{'status':'adopted','before':'old','candidate':'new'}]
+            master=root/'input.json'; master.write_text(json.dumps(value),encoding='utf-8'); work=Workspace(master,root/'work')
+            row=work.project()['items'][0]; payload={'revision':0,'segment_index':0,
+                'current_text':row['text'],'expected_fingerprint':row['retry_fingerprint'],
+                'left_text':'こんにちは。','right_text':'さようなら。','requested_time':1.55}
+            with self.assertRaises(Conflict):
+                work.mutate('/api/split/unaligned',{**payload,'expected_fingerprint':'old'})
+            with self.assertRaisesRegex(ValueError,'本文の分割位置'):
+                work.mutate('/api/split/unaligned',{**payload,'right_text':'違います'})
+            self.assertEqual(work.state['revision'],0)
+            work.mutate('/api/split/unaligned',payload)
+            rows=work.project()['items']
+            self.assertEqual([x['text'] for x in rows],['こんにちは。','さようなら。'])
+            self.assertEqual([x['alignment_status'] for x in rows],['unresolved','unresolved'])
+            self.assertEqual([x['translation']['status'] for x in rows],['missing','missing'])
+            self.assertEqual([x['timing_words'][0]['start'] for x in rows],[1.0,1.5])
+            self.assertEqual([x['end_seconds'] for x in rows],[1.5,2.0])
+            self.assertEqual(work.state['master']['utterances'][0]['split_provenance']['original_translation']['text'],'Hello. Goodbye.')
+            self.assertEqual(work.state['master']['utterances'][0]['reference_corrections'],[])
+            self.assertIsNone(work.export(True)['json_path'])
+            work.mutate('/api/undo',{'revision':1})
+            self.assertEqual(work.project()['items'][0]['text'],'こんにちは。さようなら。')
+            self.assertEqual(len(work.project()['items']),1)
+            work.close()
+
+    def test_word_timed_text_can_split_at_an_insertion_point_inside_a_word(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); master=root/'input.json'; master.write_text(json.dumps(fixture()),encoding='utf-8')
+            work=Workspace(master,root/'work'); row=work.project()['items'][0]
+            work.mutate('/api/split/unaligned',{'revision':0,'segment_index':0,
+                'current_text':row['text'],'expected_fingerprint':row['retry_fingerprint'],
+                'left_text':'Hal','right_text':'lo Welt','requested_time':1.4})
+            rows=work.project()['items']
+            self.assertEqual([item['text'] for item in rows],['Hal','lo Welt'])
+            self.assertEqual([item['alignment_status'] for item in rows],['unresolved','unresolved'])
+            self.assertEqual([item['start_seconds'] for item in rows],[1.0,1.5])
+            work.close()
+
+    def test_unsaved_text_and_translation_split_in_one_undoable_change(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); master=root/'input.json'; master.write_text(json.dumps(fixture()),encoding='utf-8')
+            work=Workspace(master,root/'work'); row=work.project()['items'][0]
+            work.mutate('/api/split/unaligned',{'revision':0,'segment_index':0,
+                'current_text':row['text'],'expected_fingerprint':row['retry_fingerprint'],
+                'draft_text':'Hello there','draft_translation':'こんにちは、みなさん',
+                'left_text':'Hello ','right_text':'there','requested_time':1.5})
+            self.assertEqual([item['text'] for item in work.project()['items']],['Hello','there'])
+            self.assertEqual(work.state['master']['utterances'][0]['split_provenance']['original_translation']['text'],
+                'こんにちは、みなさん')
+            self.assertEqual(work.state['revision'],1)
+            work.mutate('/api/undo',{'revision':1})
+            self.assertEqual(work.project()['items'][0]['text'],'Hello there')
+            self.assertEqual(work.project()['items'][0]['translation']['text'],'こんにちは、みなさん')
+            work.close()
+
+    def test_split_result_with_one_source_word_can_be_split_again_and_aligned(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); master=root/'input.json'; master.write_text(json.dumps(fixture()),encoding='utf-8')
+            work=Workspace(master,root/'work')
+            row=work.project()['items'][0]
+            work.mutate('/api/split/unaligned',{'revision':0,'segment_index':0,
+                'current_text':row['text'],'expected_fingerprint':row['retry_fingerprint'],
+                'left_text':'Hal','right_text':'lo Welt','requested_time':1.4})
+            row=work.project()['items'][1]
+            self.assertEqual(len(row['timing_words']),1)
+            work.mutate('/api/split/unaligned',{'revision':1,'segment_index':1,
+                'current_text':row['text'],'expected_fingerprint':row['retry_fingerprint'],
+                'left_text':'lo','right_text':' Welt','requested_time':1.75})
+            rows=work.project()['items']
+            self.assertEqual([item['text'] for item in rows],['Hal','lo','Welt'])
+            self.assertEqual([item['alignment_status'] for item in rows],['unresolved']*3)
+            self.assertEqual([item['start_seconds'] for item in rows],[1.0,1.5,1.75])
+            self.assertEqual([item['end_seconds'] for item in rows],[1.5,1.75,2.0])
+            self.assertEqual(work.state['master']['utterances'][1]['words'][0]['timing_origin'],'estimated-split')
+            self.assertEqual(work.state['master']['utterances'][1]['split_provenance']['original_words'][0]['text'],' Welt')
+            row=rows[1]
+            work.mutate('/api/align/manual',{'revision':2,'segment_index':1,
+                'current_text':row['text'],'expected_fingerprint':row['retry_fingerprint'],
+                'words':[{'text':'lo','start':1.5,'end':1.75}]})
+            self.assertEqual(work.project()['items'][1]['alignment_status'],'word-timed')
             work.close()
 
     def test_legacy_leading_space_candidate_can_be_adopted_only_with_matching_context(self):
@@ -80,6 +235,221 @@ class MultilingualReviewTest(unittest.TestCase):
             self.assertEqual(work.state['master']['utterances'][1],other_before)
             work.mutate('/api/undo',{'revision':4})
             self.assertEqual(work.project()['items'][0]['alignment_status'],'unresolved')
+            work.close()
+
+    def test_manual_alignment_preserves_different_speaker_cross_talk(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); value=fixture()
+            value['speakers'].append({'key':'b','name':'B'})
+            value['utterances']=[
+                {'speaker':'a','words':[{'text':'主発話','start':1.0,'end':2.0}]},
+                {'speaker':'b','words':[{'text':'相づち','start':1.4,'end':1.6}]},
+                {'speaker':'b','words':[{'text':'重なる','start':1.9,'end':2.3}]},
+                {'speaker':'a','words':[{'text':'続き','start':2.4,'end':2.8}]},
+            ]
+            master=root/'input.json'; master.write_text(json.dumps(value),encoding='utf-8')
+            work=Workspace(master,root/'work'); before=json.loads(json.dumps(work.state['master']['utterances'][1:]))
+            row=work.project()['items'][0]
+            work.mutate('/api/align/manual',{'revision':0,'segment_index':0,
+                'current_text':row['text'],'expected_fingerprint':row['retry_fingerprint'],
+                'words':[{'text':'主発話','start':1.0,'end':2.2}], 'new_end_seconds':2.2})
+            self.assertEqual(work.project()['items'][0]['end_seconds'],2.2)
+            self.assertEqual(work.state['master']['utterances'][1:],before)
+            work.close()
+
+    def test_manual_alignment_extends_envelope_and_moves_next_start_atomically(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); value=fixture()
+            value['utterances'].append({'speaker':'a','words':[
+                {'text':'Next','start':2.0,'end':2.4},{'text':' topic','start':2.4,'end':3.0}]})
+            master=root/'input.json'; master.write_text(json.dumps(value),encoding='utf-8')
+            work=Workspace(master,root/'work'); row=work.project()['items'][0]
+            payload={'revision':0,'segment_index':0,'current_text':row['text'],
+                'expected_fingerprint':row['retry_fingerprint'],'new_end_seconds':2.1,
+                'words':[{'text':'Hallo','start':1.1,'end':1.6},
+                         {'text':' Welt','start':1.6,'end':2.1}]}
+            with self.assertRaisesRegex(ValueError,'次の発話の終了'):
+                work.mutate('/api/align/manual',{**payload,'new_end_seconds':3.0})
+            self.assertEqual(work.state['revision'],0)
+            work.mutate('/api/align/manual',payload)
+            rows=work.project()['items']
+            self.assertEqual([(row['start_seconds'],row['end_seconds']) for row in rows],
+                             [(1.0,2.1),(2.1,3.0)])
+            self.assertEqual([word['start'] for word in rows[1]['timing_words']],[2.0,2.4])
+            self.assertEqual(rows[1]['alignment_status'],'unresolved')
+            self.assertEqual(work.state['master']['utterances'][1]['manual_start_adjustment_seconds'],0.1)
+            work.mutate('/api/undo',{'revision':1})
+            self.assertEqual([(row['start_seconds'],row['end_seconds']) for row in work.project()['items']],
+                             [(1.0,2.0),(2.0,3.0)])
+            work.close()
+
+    def test_end_adjustment_preserves_words_and_different_speaker_overlap(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); value=fixture()
+            value['speakers'].append({'key':'b','name':'B'})
+            value['utterances']=[
+                {'speaker':'a','words':[{'text':'主発話','start':1.0,'end':2.4}]},
+                {'speaker':'b','words':[{'text':'相づち','start':1.8,'end':2.2}]},
+                {'speaker':'a','words':[{'text':'続き','start':2.7,'end':3.2}]},
+            ]
+            master=root/'input.json'; master.write_text(json.dumps(value),encoding='utf-8')
+            work=Workspace(master,root/'work')
+            work.state['master']['utterances'][0]['review_envelope']['end']=2.0
+            work.state['master']['utterances'][0]['alignment_status']='unresolved'
+            row=work.project()['items'][0]
+            before=json.loads(json.dumps(work.state['master']['utterances']))
+            payload={'revision':0,'segment_index':0,'current_text':row['text'],
+                     'expected_fingerprint':row['retry_fingerprint'],'new_end_seconds':2.5}
+            with self.assertRaisesRegex(ValueError,'単語時刻より前'):
+                work.mutate('/api/align/end',{**payload,'new_end_seconds':2.3})
+            self.assertEqual(work.state['revision'],0)
+            work.mutate('/api/align/end',payload)
+            rows=work.project()['items']
+            self.assertEqual(rows[0]['end_seconds'],2.5)
+            self.assertEqual(rows[0]['alignment_status'],'word-timed')
+            self.assertEqual(work.state['master']['utterances'][0]['words'],before[0]['words'])
+            self.assertEqual(work.state['master']['utterances'][1:],before[1:])
+            work.mutate('/api/undo',{'revision':1})
+            self.assertEqual(work.project()['items'][0]['end_seconds'],2.0)
+            work.close()
+
+    def test_end_adjustment_moves_only_next_same_speaker_start(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); value=fixture()
+            value['utterances'].append({'speaker':'a','words':[
+                {'text':'Next','start':2.0,'end':2.4},{'text':' topic','start':2.4,'end':3.0}]})
+            master=root/'input.json'; master.write_text(json.dumps(value),encoding='utf-8')
+            work=Workspace(master,root/'work'); row=work.project()['items'][0]
+            next_words=json.loads(json.dumps(work.state['master']['utterances'][1]['words']))
+            payload={'revision':0,'segment_index':0,'current_text':row['text'],
+                     'expected_fingerprint':row['retry_fingerprint'],'new_end_seconds':2.2}
+            with self.assertRaisesRegex(ValueError,'次の発話の終了'):
+                work.mutate('/api/align/end',{**payload,'new_end_seconds':3.0})
+            work.mutate('/api/align/end',payload)
+            rows=work.project()['items']
+            self.assertEqual([(r['start_seconds'],r['end_seconds']) for r in rows],
+                             [(1.0,2.2),(2.2,3.0)])
+            self.assertEqual(work.state['master']['utterances'][1]['words'],next_words)
+            self.assertEqual(rows[1]['alignment_status'],'unresolved')
+            work.close()
+
+    def test_existing_zero_duration_word_can_move_without_creating_new_zero_words(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); value=fixture()
+            value['utterances'][0]['words'][0].update(start=1.1,end=1.1)
+            value['utterances'][0]['words'][1].update(start=1.1)
+            value['utterances'].append({'speaker':'a','words':[{'text':'Next','start':2.0,'end':3.0}]})
+            master=root/'input.json'; master.write_text(json.dumps(value),encoding='utf-8')
+            work=Workspace(master,root/'work'); row=work.project()['items'][0]
+            payload={'revision':0,'segment_index':0,'current_text':row['text'],
+                'expected_fingerprint':row['retry_fingerprint'],'new_end_seconds':2.1,
+                'words':[{'text':'Hallo','start':1.2,'end':1.2},
+                         {'text':' Welt','start':1.2,'end':2.1}]}
+            with self.assertRaisesRegex(ValueError,'単語時刻'):
+                work.mutate('/api/align/manual',{**payload,'words':[
+                    {'text':'Hallo','start':1.2,'end':1.2},
+                    {'text':' Welt','start':1.2,'end':1.2}]})
+            work.mutate('/api/align/manual',payload)
+            rows=work.project()['items']
+            self.assertEqual((rows[0]['timing_words'][0]['start'],rows[0]['timing_words'][0]['end']),(1.2,1.2))
+            self.assertEqual((rows[0]['end_seconds'],rows[1]['start_seconds']),(2.1,2.1))
+            work.mutate('/api/undo',{'revision':1})
+            self.assertEqual(work.project()['items'][0]['timing_words'][0]['start'],1.1)
+            work.close()
+
+    def test_manual_alignment_can_repair_a_word_left_before_a_shifted_start(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); value=fixture()
+            value['utterances'][0]['words'][0].update(start=1.0,end=1.2)
+            value['utterances'][0]['words'][1].update(start=1.9,end=2.4)
+            master=root/'input.json'; master.write_text(json.dumps(value),encoding='utf-8')
+            work=Workspace(master,root/'work'); row=work.project()['items'][0]
+            work.mutate('/api/align/start',{'revision':0,'segment_index':0,
+                'current_text':row['text'],'expected_fingerprint':row['retry_fingerprint'],
+                'new_start_seconds':1.5})
+            row=work.project()['items'][0]
+            payload={'revision':1,'segment_index':0,'current_text':row['text'],
+                'expected_fingerprint':row['retry_fingerprint'],
+                'words':[{'text':'Hallo','start':1.5,'end':1.7},
+                         {'text':' Welt','start':1.9,'end':2.4}]}
+            with self.assertRaisesRegex(ValueError,'単語時刻'):
+                work.mutate('/api/align/manual',{**payload,'words':[
+                    {'text':'Hallo','start':1.0,'end':1.2},payload['words'][1]]})
+            work.mutate('/api/align/manual',payload)
+            result=work.project()['items'][0]
+            self.assertEqual(result['alignment_status'],'word-timed')
+            self.assertEqual((result['timing_words'][0]['start'],result['timing_words'][0]['end']),(1.5,1.7))
+            work.close()
+
+    def test_shift_utterance_moves_envelope_and_words_without_changing_content(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); master=root/'input.json'; value=fixture()
+            value['utterances'][0]['translation']={'text':'こんにちは、世界','status':'ready',
+                'provider':'manual','source_text':'Hallo Welt','source_language':'de-de'}
+            audio=root/'audio.wav'
+            with wave.open(str(audio),'wb') as sound:
+                sound.setnchannels(1); sound.setsampwidth(2); sound.setframerate(1000)
+                sound.writeframes(b'\x00\x00'*3000)
+            master.write_text(json.dumps(value),encoding='utf-8'); work=Workspace(master,root/'work',media=audio)
+            row=work.project()['items'][0]
+            payload={'revision':0,'segment_index':0,'current_text':row['text'],
+                     'expected_fingerprint':row['retry_fingerprint'],'new_start_seconds':1.25}
+            with self.assertRaises(Conflict):
+                work.mutate('/api/align/shift',{**payload,'expected_fingerprint':'old'})
+            with self.assertRaisesRegex(ValueError,'開始前'):
+                work.mutate('/api/align/shift',{**payload,'new_start_seconds':-0.1})
+            with self.assertRaisesRegex(ValueError,'素材の長さ'):
+                work.mutate('/api/align/shift',{**payload,'new_start_seconds':2.5})
+            work.mutate('/api/align/shift',payload)
+            moved=work.project()['items'][0]
+            self.assertEqual((moved['start_seconds'],moved['end_seconds']),(1.25,2.25))
+            self.assertEqual([(word['start'],word['end']) for word in moved['timing_words']],
+                             [(1.25,1.75),(1.75,2.25)])
+            self.assertEqual(moved['text'],'Hallo Welt')
+            self.assertEqual(moved['translation']['text'],'こんにちは、世界')
+            self.assertEqual(work.state['master']['utterances'][0]['manual_time_shift_seconds'],0.25)
+            work.mutate('/api/undo',{'revision':1})
+            self.assertEqual((work.project()['items'][0]['start_seconds'],work.project()['items'][0]['end_seconds']),
+                             (1.0,2.0))
+            work.close()
+
+    def test_start_adjustment_keeps_end_and_next_start_and_trims_previous_with_undo(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); value=fixture()
+            value['utterances']=[
+                {'speaker':'a','words':[{'text':'Before','start':0.0,'end':0.7},
+                                        {'text':' now','start':0.7,'end':1.0}]},
+                {'speaker':'a','words':[{'text':'Hallo','start':1.0,'end':1.5},
+                                        {'text':' Welt','start':1.5,'end':2.0}]},
+                {'speaker':'a','words':[{'text':'After','start':2.0,'end':3.0}]}]
+            master=root/'input.json'; master.write_text(json.dumps(value),encoding='utf-8')
+            work=Workspace(master,root/'work'); row=work.project()['items'][1]
+            payload={'revision':0,'segment_index':1,'current_text':row['text'],
+                     'expected_fingerprint':row['retry_fingerprint'],'new_start_seconds':0.9}
+            with self.assertRaises(Conflict):
+                work.mutate('/api/align/start',{**payload,'expected_fingerprint':'old'})
+            with self.assertRaisesRegex(ValueError,'前の区間の開始'):
+                work.mutate('/api/align/start',{**payload,'new_start_seconds':0.0})
+            work.mutate('/api/align/start',payload)
+            rows=work.project()['items']
+            self.assertEqual([(r['start_seconds'],r['end_seconds']) for r in rows],
+                             [(0.0,0.9),(0.9,2.0),(2.0,3.0)])
+            self.assertEqual([r['alignment_status'] for r in rows],
+                             ['unresolved','word-timed','word-timed'])
+            self.assertEqual(rows[0]['timing_words'][-1]['end'],1.0)
+            self.assertEqual(rows[1]['timing_words'][0]['start'],1.0)
+            work.mutate('/api/undo',{'revision':1})
+            self.assertEqual([(r['start_seconds'],r['end_seconds']) for r in work.project()['items']],
+                             [(0.0,1.0),(1.0,2.0),(2.0,3.0)])
+            row=work.project()['items'][1]
+            work.mutate('/api/align/start',{'revision':2,'segment_index':1,
+                'current_text':row['text'],'expected_fingerprint':row['retry_fingerprint'],
+                'new_start_seconds':1.2})
+            rows=work.project()['items']
+            self.assertEqual([(r['start_seconds'],r['end_seconds']) for r in rows],
+                             [(0.0,1.0),(1.2,2.0),(2.0,3.0)])
+            self.assertEqual(rows[1]['alignment_status'],'unresolved')
+            self.assertEqual(rows[1]['timing_words'][0]['start'],1.0)
             work.close()
 
     def test_translation_staleness_candidate_and_export_gate(self):
@@ -148,6 +518,92 @@ class MultilingualReviewTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'次の発言がありません'):
                 work.mutate('/api/merge',{'revision':1,'segment_index':1,'current_text':'次','next_text':''})
             work.mutate('/api/undo',{'revision':1}); self.assertEqual(len(work.state['master']['utterances']),3); work.close()
+
+    def test_english_merge_inserts_space_and_accepts_unsaved_edits(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); value=fixture(); value['utterances']=[
+                {'speaker':'a','language':'en-us','words':[{'text':'Thank you.','start':1.0,'end':2.0}]},
+                {'speaker':'a','language':'en-us','words':[{'text':"I'm here",'start':2.0,'end':3.0}]}]
+            master=root/'input.json'; master.write_text(json.dumps(value),encoding='utf-8'); work=Workspace(master,root/'work')
+            work.mutate('/api/merge',{'revision':0,'segment_index':0,'current_text':'Thank you.',
+                'next_text':"I'm here",'left_draft_text':'Thank you.','right_draft_text':"I'm ready",
+                'right_draft_translation':'準備できています'})
+            merged=work.state['master']['utterances'][0]
+            self.assertEqual(work.project()['items'][0]['text'],"Thank you. I'm ready")
+            self.assertEqual(merged['translation']['text'],'準備できています')
+            self.assertEqual(merged['merge_provenance'][0]['right']['text_override'],"I'm ready")
+            self.assertEqual(merged['alignment_status'],'unresolved')
+            work.mutate('/api/undo',{'revision':1})
+            self.assertEqual(len(work.project()['items']),2)
+            self.assertEqual(work.project()['items'][1]['text'],"I'm ready")
+            self.assertEqual(work.project()['items'][1]['translation']['text'],'準備できています')
+            work.close()
+
+    def test_english_merge_keeps_existing_word_times_when_only_space_is_added(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); value=fixture(); value['utterances']=[
+                {'speaker':'a','language':'en-us','words':[{'text':'Thank you.','start':1.0,'end':2.0}]},
+                {'speaker':'a','language':'en-us','words':[{'text':" I'm here",'start':2.0,'end':3.0}]}]
+            master=root/'input.json'; master.write_text(json.dumps(value),encoding='utf-8'); work=Workspace(master,root/'work')
+            work.mutate('/api/merge',{'revision':0,'segment_index':0,'current_text':'Thank you.','next_text':"I'm here"})
+            merged=work.state['master']['utterances'][0]
+            self.assertEqual(work.project()['items'][0]['text'],"Thank you. I'm here")
+            self.assertEqual(merged['words'][1]['text']," I'm here")
+            self.assertEqual(merged['alignment_status'],'word-timed')
+            work.close()
+
+    def test_multilingual_merge_preserves_overlapping_words_and_flags_alignment(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); value=fixture(); value['utterances']=[
+                {'speaker':'a','language':'ja-jp','words':[
+                    {'text':'先','start':1.0,'end':1.8},{'text':'行','start':1.8,'end':2.4}]},
+                {'speaker':'a','language':'ja-jp','words':[
+                    {'text':'次','start':2.0,'end':2.5},{'text':'句','start':2.5,'end':2.8}]}]
+            master=root/'input.json'; master.write_text(json.dumps(value),encoding='utf-8'); work=Workspace(master,root/'work')
+            work.mutate('/api/merge',{'revision':0,'segment_index':0,'current_text':'先行','next_text':'次句'})
+            merged=work.state['master']['utterances'][0]
+            self.assertEqual([w['text'] for w in merged['words']],['先','行','次','句'])
+            self.assertEqual([w['start'] for w in merged['words']],[1.0,1.8,2.0,2.5])
+            self.assertEqual(work.project()['items'][0]['text'],'先行次句')
+            self.assertEqual(merged['review_envelope'],{'start':1.0,'end':2.8})
+            self.assertEqual(merged['alignment_status'],'unresolved')
+            self.assertEqual(len(merged['merge_provenance']),1)
+            self.assertIsNone(work.export(True)['json_path'])
+            work.mutate('/api/undo',{'revision':1})
+            self.assertEqual(len(work.project()['items']),2)
+            work.close()
+
+    def test_delete_duplicate_utterance_is_guarded_and_undoable(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); value=fixture(); value['utterances']=[
+                {'speaker':'a','words':[{'text':'残す','start':1.0,'end':2.0}]},
+                {'speaker':'a','words':[{'text':'重複','start':1.5,'end':2.2}]},
+                {'speaker':'a','words':[{'text':'続き','start':3.0,'end':4.0}]}]
+            master=root/'input.json'; master.write_text(json.dumps(value),encoding='utf-8'); work=Workspace(master,root/'work')
+            target=work.project()['items'][1]
+            payload={'revision':0,'segment_index':1,'current_text':target['text'],
+                     'expected_fingerprint':target['retry_fingerprint']}
+            with self.assertRaises(Conflict):
+                work.mutate('/api/delete',{**payload,'expected_fingerprint':'old'})
+            self.assertEqual(work.state['revision'],0)
+            work.mutate('/api/delete',payload)
+            self.assertEqual([row['text'] for row in work.project()['items']],['残す','続き'])
+            work.mutate('/api/undo',{'revision':1})
+            self.assertEqual([row['text'] for row in work.project()['items']],['残す','重複','続き'])
+            work.mutate('/api/redo',{'revision':2})
+            self.assertEqual([row['text'] for row in work.project()['items']],['残す','続き'])
+            self.assertEqual(master.read_text(encoding='utf-8'),json.dumps(value))
+            work.close()
+
+    def test_delete_keeps_one_utterance(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); master=root/'input.json'; master.write_text(json.dumps(fixture()),encoding='utf-8')
+            work=Workspace(master,root/'work'); target=work.project()['items'][0]
+            with self.assertRaisesRegex(ValueError,'最後の発言'):
+                work.mutate('/api/delete',{'revision':0,'segment_index':0,'current_text':target['text'],
+                    'expected_fingerprint':target['retry_fingerprint']})
+            self.assertEqual(work.state['revision'],0)
+            work.close()
 
     def test_inferred_language_batch_is_atomic_protected_and_undoable(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -283,6 +739,80 @@ class MultilingualReviewTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'既存の訳'):
                     work.mutate('/api/translation/generate',{'revision':2,'segment_index':3})
                 provider.assert_not_called()
+            work.close()
+
+    def test_group_translation_keeps_source_and_applies_reviewed_fragments_with_one_undo(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); value=fixture()
+            value['utterances']=[
+                {'speaker':'a','language':'en-us','words':[{'text':'This is a','start':1,'end':2}]},
+                {'speaker':'a','language':'en-us','words':[{'text':' longer sentence.','start':2.5,'end':3.5}]},
+                {'speaker':'a','language':'ja-jp','words':[{'text':'そうですね','start':4,'end':5}]}]
+            master=root/'input.json'; master.write_text(json.dumps(value),encoding='utf-8')
+            work=Workspace(master,root/'work'); before=json.loads(json.dumps(work.state['master']['utterances']))
+            self.assertEqual(work.project()['translation_groups'][0]['indices'],[0,1])
+            with self.assertRaisesRegex(ValueError,'同じ話者・言語'):
+                work.mutate('/api/translation/group/apply',{'revision':0,'indices':[0,1,2]})
+            work.translation_config={'key':'test-key','model':'gpt-4.1-mini'}; requests=[]
+            def respond(request,timeout):
+                requests.append(json.loads(request.data))
+                return io.BytesIO(json.dumps({'output':[{'content':[{'type':'output_text','text':json.dumps({
+                    'full_translation':'これは長い文章です。','segments':['これは','長い文章です。']})}]}]}).encode())
+            with patch('urllib.request.urlopen',side_effect=respond):
+                work.mutate('/api/translation/group/generate',{'revision':0,'indices':[0,1]})
+            self.assertEqual(len(requests),1)
+            self.assertFalse(requests[0]['store'])
+            self.assertEqual([entry['in_group'] for entry in json.loads(requests[0]['input'])['dialogue']],[True,True,False])
+            self.assertEqual([u['translation']['status'] for u in work.state['master']['utterances'][:2]],['missing','missing'])
+            candidate=work.project()['translation_group_candidates'][0]
+            with self.assertRaisesRegex(ValueError,'各区間'):
+                work.mutate('/api/translation/group/apply',{'revision':1,'indices':[0,1],
+                    'candidate_id':candidate['id'],'full_translation':'これは長い文章です。','segment_translations':['これは','']})
+            work.mutate('/api/translation/group/apply',{'revision':1,'indices':[0,1],
+                'candidate_id':candidate['id'],'full_translation':'これは長い文章です。',
+                'segment_translations':['これは','長い文章です。']})
+            self.assertEqual([u['translation']['text'] for u in work.state['master']['utterances'][:2]],['これは','長い文章です。'])
+            for index in range(3):
+                self.assertEqual(work.state['master']['utterances'][index]['words'],before[index]['words'])
+                self.assertEqual(work.state['master']['utterances'][index]['speaker'],before[index]['speaker'])
+                self.assertEqual(work.state['master']['utterances'][index]['review_envelope'],before[index]['review_envelope'])
+            work.mutate('/api/undo',{'revision':2})
+            self.assertEqual([u['translation']['status'] for u in work.state['master']['utterances'][:2]],['missing','missing'])
+            work.close()
+
+    def test_group_translation_accepts_manual_review_without_model(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); value=fixture(); value['utterances'][0]['language']='en-us'
+            master=root/'input.json'; master.write_text(json.dumps(value),encoding='utf-8')
+            work=Workspace(master,root/'work')
+            work.mutate('/api/translation/group/apply',{'revision':0,'indices':[0],
+                'full_translation':'こんにちは、世界','segment_translations':['こんにちは、世界']})
+            row=work.project()['items'][0]
+            self.assertEqual(row['translation']['provider'],'manual')
+            self.assertEqual(row['translation']['group_text'],'こんにちは、世界')
+            work.close()
+
+    def test_group_translation_recovers_an_empty_fragment_without_applying_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); value=fixture()
+            value['utterances']=[
+                {'speaker':'a','language':'en-us','words':[{'text':'First','start':1,'end':2}]},
+                {'speaker':'a','language':'en-us','words':[{'text':' part','start':2.5,'end':3.5}]}]
+            master=root/'input.json'; master.write_text(json.dumps(value),encoding='utf-8')
+            work=Workspace(master,root/'work'); work.translation_config={'key':'test-key','model':'gpt-4.1-mini'}
+            replies=[{'full_translation':'前半後半','segments':['','後半']},
+                     {'full_translation':'前半後半','segments':['','後半']},
+                     {'text':'前半'}]
+            def respond(request,timeout):
+                return io.BytesIO(json.dumps({'output':[{'content':[{'type':'output_text',
+                    'text':json.dumps(replies.pop(0))}]}]}).encode())
+            with patch('urllib.request.urlopen',side_effect=respond):
+                work.mutate('/api/translation/group/generate',{'revision':0,'indices':[0,1]})
+            candidate=work.project()['translation_group_candidates'][0]
+            self.assertEqual(candidate['segment_translations'],['前半','後半'])
+            self.assertTrue(candidate['warnings'])
+            self.assertEqual([item['translation']['status'] for item in work.project()['items']],['missing','missing'])
+            self.assertEqual(replies,[])
             work.close()
 
     def test_unknown_language_and_empty_result_do_not_mutate_workspace(self):

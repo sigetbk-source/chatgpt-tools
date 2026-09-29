@@ -15,7 +15,7 @@ from multi_iso import (DEFAULTS, analyze, build_master, duplicate_groups, frame_
                        explicit_reference_candidates, contextual_reference_candidates,
                        preserve_manual_speaker_edits, score_utterance,
                        suppress_louder_owner_echoes, volume_evidence)
-from multilingual_review import Workspace, display_text
+from multilingual_review import Workspace, display_text, combined_reference_proposal
 
 
 def audio(levels=(0.8, 0.1, 0.03), seconds=3, sr=16000):
@@ -235,6 +235,57 @@ class MultiISOTests(unittest.TestCase):
             self.assertEqual(changed['raw_asr_text'], 'And Questions Amazon Ad')
             self.assertEqual(sum(x['adopted'] for x in changed['reference_corrections']), 2)
             work.close()
+
+    def test_two_disjoint_iso_reference_corrections_adopt_as_one_undoable_edit(self):
+        original = 'And Questions Amazon Ad'
+        master = {'schema': 'bk-master-transcript/v0.1', 'source_id': 'test', 'language': 'en-us',
+                  'provenance': {'multi_iso': True, 'interval': {'start_tc': '13:32:51', 'duration_seconds': 120}},
+                  'speakers': [{'key': 'host', 'name': '田中'}],
+                  'utterances': [{'speaker': 'host', 'language': 'en-us', 'raw_asr_text': original,
+                      'review_envelope': {'start': 4.2, 'end': 5.9},
+                      'words': [{'text': original, 'start': 4.2, 'end': 5.9, 'confidence': .9, 'eos': True}],
+                      'reference_corrections': [
+                          {'before': original, 'candidate': '&questions Amazon Ad', 'matched_term': 'And Questions', 'status': 'candidate', 'adopted': False},
+                          {'before': original, 'candidate': 'And Questions Amazon Ads', 'matched_term': 'Amazon Ad', 'status': 'candidate', 'adopted': False}]}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'master.json'; source.write_text(json.dumps(master))
+            work = Workspace(source, Path(tmp) / 'review')
+            proposed = work.project()['items'][0]['reference_proposal']
+            self.assertEqual(proposed['text'], '&questions Amazon Ads')
+            self.assertEqual([proposed['text'][x['start']:x['end']] for x in proposed['highlights']],
+                             ['&questions', 'Amazon Ads'])
+            work.mutate('/api/references/iso-adopt-all', {'revision': 0, 'segment_index': 0,
+                        'current_text': original, 'proposal_text': proposed['text']})
+            changed = work.state['master']['utterances'][0]
+            self.assertEqual(changed['text_override'], '&questions Amazon Ads')
+            self.assertEqual(sum(x['adopted'] for x in changed['reference_corrections']), 2)
+            self.assertEqual(changed['raw_asr_text'], original)
+            self.assertEqual(work.project()['items'][0]['reference_applied']['ranges'], proposed['highlights'])
+            work.mutate('/api/undo', {'revision': 1})
+            self.assertEqual(display_text(work.state['master']['utterances'][0]), original)
+            work.mutate('/api/references/iso-adopt-all', {'revision': 2, 'segment_index': 0,
+                        'current_text': original, 'proposal_text': proposed['text'],
+                        'edited_text': '&questions and Amazon Ads'})
+            self.assertEqual(display_text(work.state['master']['utterances'][0]), '&questions and Amazon Ads')
+            applied=work.project()['items'][0]['reference_applied']
+            self.assertEqual([applied['text'][x['start']:x['end']] for x in applied['ranges']],
+                             ['&questions', 'Amazon Ads'])
+            work.close()
+
+    def test_overlapping_reference_corrections_are_not_combined(self):
+        before = 'Amazon Ad'
+        corrections = [{'before': before, 'candidate': 'Amazon Ads', 'status': 'candidate'},
+                       {'before': before, 'candidate': 'Amazon Advertising', 'status': 'candidate'}]
+        self.assertIsNone(combined_reference_proposal(before, corrections))
+
+    def test_duplicate_source_corrections_count_as_one_text_edit(self):
+        before = 'Amazon Ad'
+        corrections = [{'before': before, 'candidate': 'Amazon Ads', 'status': 'candidate'},
+                       {'before': before, 'candidate': 'Amazon Ads', 'status': 'candidate'}]
+        proposal = combined_reference_proposal(before, corrections)
+        self.assertEqual(proposal['text'], 'Amazon Ads')
+        self.assertEqual(proposal['indexes'], [0, 1])
+        self.assertEqual(len(proposal['edits']), 1)
 
 
 if __name__ == '__main__':
