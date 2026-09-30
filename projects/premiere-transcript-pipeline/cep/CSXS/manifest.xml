@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ExtensionManifest Version="7.0" ExtensionBundleId="jp.tbk.transcript.caption" ExtensionBundleVersion="0.1.0" ExtensionBundleName="Transcript Caption Placement">
+  <ExtensionList><Extension Id="jp.tbk.transcript.caption.panel" Version="0.1.0" /></ExtensionList>
+  <ExecutionEnvironment>
+    <HostList><Host Name="PPRO" Version="[25.0,26.0]" /></HostList>
+    <LocaleList><Locale Code="All" /></LocaleList>
+    <RequiredRuntimeList><RequiredRuntime Name="CSXS" Version="11.0" /></RequiredRuntimeList>
+  </ExecutionEnvironment>
+  <DispatchInfoList><Extension Id="jp.tbk.transcript.caption.panel"><DispatchInfo>
+    <Resources><MainPath>./index.html</MainPath><ScriptPath>./jsx/host.jsx</ScriptPath>
+      <CEFCommandLine><Parameter>--enable-nodejs</Parameter></CEFCommandLine></Resources>
+    <Lifecycle><AutoVisible>true</AutoVisible></Lifecycle>
+    <UI><Type>Panel</Type><Menu>Transcript Caption Placement</Menu>
+      <Geometry><Size><Height>220</Height><Width>400</Width></Size></Geometry></UI>
+  </DispatchInfo></Extension></DispatchInfoList>
+</ExtensionManifest>

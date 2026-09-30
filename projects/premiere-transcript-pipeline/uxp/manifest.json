@@ -1,0 +1,11 @@
+{
+  "manifestVersion": 5,
+  "id": "jp.tbk.premiere-transcript-workflow",
+  "name": "Premiere Transcript Workflow",
+  "version": "0.1.2",
+  "main": "index.html",
+  "host": { "app": "premierepro", "minVersion": "25.6.0", "maxVersion": "25.9.9" },
+  "requiredPermissions": { "localFileSystem": "fullAccess", "launchProcess": { "schemes": ["http"] } },
+  "entrypoints": [{ "type": "panel", "id": "workflow", "label": { "default": "Transcript Workflow" },
+    "minimumSize": { "width": 360, "height": 200 } }]
+}

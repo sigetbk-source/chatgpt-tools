@@ -14,6 +14,7 @@
 
 - [`skills/hawks-magic-chart/`](skills/hawks-magic-chart/README.md): ホークスの優勝マジック推移を 16:9 PNG に決定論的に描画
 - [`projects/ticket-launcher/`](projects/ticket-launcher/README.md): チケット発売時刻に販売ページへ移動する iPhone アプリ
+- [`projects/premiere-transcript-pipeline/`](projects/premiere-transcript-pipeline/README.md): Premiere非依存で文字起こし・単語TC・話者情報を構築し、Premiere Transcript JSONへ戻す編集基盤
 - [`docs/github-operations.md`](docs/github-operations.md): GitHub の集約・移行・変更管理ルール
 - [`docs/llm-usage.md`](docs/llm-usage.md): ChatGPT / Codex / Claude / Gemini / Cursor からの参照方法
 
