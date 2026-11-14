@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Premiere 文字起こし修正</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <div class="header-media">
+      <video id="video" src="/media" controls preload="metadata" hidden></video>
+      <audio id="audio" src="/audio.wav" controls preload="metadata"></audio>
+    </div>
+    <div class="header-copy">
+      <div class="header-topline">
+        <p class="eyebrow">PREMIERE TRANSCRIPT REVIEW</p>
+        <div class="highlight-legend" aria-label="変更箇所の色分け">
+          <span><i class="legend-reference"></i>資料・台本に基づく変更</span>
+          <span><i class="legend-whisper"></i>Whisperに基づく変更／提案元</span>
+          <span><i class="legend-target"></i>Premiereの変更対象</span>
+        </div>
+      </div>
+      <h1 id="project-title">元素材の文字起こし修正</h1>
+      <p id="source-media"></p>
+      <p id="summary">データを読み込んでいます…</p>
+      <div class="header-actions-row">
+        <div class="header-buttons">
+          <button id="undo-segment-edit" disabled>元に戻す</button>
+          <button id="redo-segment-edit" disabled>やり直す</button>
+          <button id="export">確認内容を保存</button>
+        </div>
+      </div>
+      <section class="toolbar">
+        <label>優先表示
+          <select id="filter">
+            <option value="all" selected>全文（素材冒頭から）</option>
+            <option value="terms">固有名詞・専門用語</option>
+            <option value="large">差が大きい箇所</option>
+            <option value="review">差がある箇所</option>
+            <option value="unapproved">未承認（後で確認を含む）</option>
+          </select>
+        </label>
+        <label>話者絞り込み
+          <select id="speaker-filter">
+            <option value="" selected>すべての話者</option>
+          </select>
+        </label>
+        <label>検索 <input id="search" type="search" placeholder="固有名詞・本文・話者"></label>
+        <span id="visible-count"></span>
+      </section>
+    </div>
+  </header>
+  <main>
+    <section id="items" class="items"></section>
+  </main>
+  <template id="item-template">
+    <article class="card">
+      <div class="meta">
+        <button class="play">▶ 試聴</button>
+        <div class="speaker-control">
+          <span class="speaker-label">話者</span>
+          <select class="speaker-select" aria-label="話者を選択"></select>
+          <div class="speaker-new" hidden>
+            <input class="speaker-editor" type="text" placeholder="新しい話者名" aria-label="新しい話者名">
+            <button class="speaker-save" type="button">確定</button>
+            <button class="speaker-cancel" type="button">取消</button>
+          </div>
+          <span class="speaker-mode"></span>
+        </div>
+        <span class="time"></span>
+        <span class="difference"></span>
+        <span class="shortcut-hint">⌘↵ 再生/停止・Esc 停止</span>
+        <span class="status" hidden></span>
+      </div>
+      <div class="terms"></div>
+      <div class="identity-hints"></div>
+      <div class="verification-notes"></div>
+      <div class="comparison">
+        <div class="proposal">
+          <h2>修正案</h2>
+          <div class="proposal-editor-wrap">
+            <div class="proposal-highlight" aria-hidden="true"></div>
+            <textarea></textarea>
+          </div>
+        </div>
+        <div class="premiere-panel">
+          <h2>Premiere</h2>
+          <p class="original"></p>
+          <button class="use-premiere-selection" hidden>選択部分を採用</button>
+        </div>
+        <div class="whisper-panel">
+          <h2>Whisper</h2>
+          <p class="whisper"></p>
+          <button class="use-whisper-selection" hidden>選択部分を採用</button>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="approve">この修正案を承認</button>
+        <button class="hold">後で確認</button>
+        <button class="split-segment" disabled>カーソル位置で分割</button>
+        <button class="merge-next">次の区間と結合</button>
+        <span class="saved"></span>
+      </div>
+    </article>
+  </template>
+  <dialog id="speaker-manager" aria-labelledby="speaker-manager-title">
+    <form method="dialog" class="speaker-manager-panel">
+      <div class="speaker-manager-heading">
+        <div>
+          <p class="eyebrow">PROJECT SPEAKERS</p>
+          <h2 id="speaker-manager-title">話者名を管理</h2>
+        </div>
+        <button id="speaker-manager-close" value="cancel" aria-label="閉じる">×</button>
+      </div>
+      <label>変更・削除する話者
+        <select id="speaker-manager-source"></select>
+      </label>
+      <p id="speaker-manager-usage"></p>
+      <label>変更・統合先
+        <select id="speaker-manager-target"></select>
+      </label>
+      <label>新しい話者名
+        <input id="speaker-manager-new-name" type="text" maxlength="100" placeholder="新しい名前を入力">
+      </label>
+      <p class="speaker-manager-note">使用中の名前を削除する場合は、置換先を指定します。初期話者名は削除できません。</p>
+      <div class="speaker-manager-actions">
+        <button id="speaker-manager-replace" type="button">名前変更・統合</button>
+        <button id="speaker-manager-delete" type="button" class="danger">候補から削除</button>
+        <button value="cancel">取消</button>
+      </div>
+    </form>
+  </dialog>
+  <div id="toast"></div>
+  <script src="/highlight-ranges.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

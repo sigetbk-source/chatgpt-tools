@@ -1,0 +1,44 @@
+{
+  "manifestVersion": 5,
+  "id": "jp.tbk.premiere-transcript-review",
+  "name": "Premiere制作支援",
+  "version": "0.4.0",
+  "main": "index.html",
+  "featureFlags": {
+    "allowFocusOnClickForPanels": true,
+    "enableAlerts": true
+  },
+  "host": {
+    "app": "premierepro",
+    "minVersion": "25.6.0"
+  },
+  "requiredPermissions": {
+    "localFileSystem": "fullAccess",
+    "network": {
+      "domains": ["http://127.0.0.1:8878", "http://127.0.0.1:8878/*"]
+    },
+    "launchProcess": {
+      "extensions": [""]
+    }
+  },
+  "entrypoints": [
+    {
+      "type": "panel",
+      "id": "transcriptReviewPanel",
+      "label": {"default": "Premiere制作支援"},
+      "minimumSize": {"width": 360, "height": 480},
+      "preferredDockedSize": {"width": 430, "height": 720},
+      "preferredFloatingSize": {"width": 520, "height": 760}
+    },
+    {
+      "type": "command",
+      "id": "applyPendingTranscript",
+      "label": {"default": "未反映の修正版文字起こしを反映・確認"}
+    },
+    {
+      "type": "command",
+      "id": "applyNarrationTranscripts",
+      "label": {"default": "個別ナレーションWAVへ文字起こしを登録"}
+    }
+  ]
+}

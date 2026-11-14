@@ -1,0 +1,9 @@
+release*/
+metadata-source/
+*.ccx
+*.xdx
+*-report.json
+*-manifest.json
+verification.json
+state-migration.json
+deployment*.json

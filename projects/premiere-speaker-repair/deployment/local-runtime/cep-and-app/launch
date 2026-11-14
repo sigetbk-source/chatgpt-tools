@@ -1,0 +1,7 @@
+#!/bin/zsh
+set -euo pipefail
+LOCAL_ROOT="$HOME/Library/Application Support/Premiere制作支援"
+PYTHON="$LOCAL_ROOT/python/bin/python3"
+LAUNCHER="$LOCAL_ROOT/narration/launcher.py"
+mkdir -p "$LOCAL_ROOT/logs"
+exec "$PYTHON" "$LAUNCHER" >>"$LOCAL_ROOT/logs/narration-launch.log" 2>&1

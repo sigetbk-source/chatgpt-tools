@@ -1,0 +1,28 @@
+:root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif; background:#111315; color:#f2f4f5; }
+* { box-sizing:border-box; }
+body { margin:0; }
+header { position:sticky; top:0; z-index:2; display:flex; justify-content:space-between; gap:24px; align-items:center; padding:24px 5vw; background:rgba(17,19,21,.94); border-bottom:1px solid #34383d; backdrop-filter:blur(16px); }
+h1 { margin:2px 0 4px; font-size:28px; }
+.eyebrow { color:#81d4b4; font-size:11px; letter-spacing:.16em; margin:0; }
+#summary { color:#aeb5bb; margin:0; }
+audio { width:min(480px,45vw); }
+main { width:min(1180px,92vw); margin:28px auto 80px; }
+.toolbar { display:flex; gap:22px; align-items:end; padding:16px; background:#1b1e21; border:1px solid #34383d; border-radius:14px; }
+label { display:grid; gap:6px; color:#bfc5ca; font-size:13px; }
+select,input { min-width:220px; color:#f4f6f7; background:#101214; border:1px solid #42474d; border-radius:8px; padding:9px 11px; }
+.diagnostics { display:grid; gap:8px; margin:16px 0; }
+.diagnostic-row { display:flex; justify-content:space-between; gap:16px; align-items:center; padding:14px 16px; border-left:3px solid #81d4b4; background:#18211e; color:#cce8dd; }
+.diagnostic-row div { display:grid; gap:4px; }
+.diagnostic-row span { font-size:12px; color:#a9c8bc; }
+.diagnostic-row .warning { padding:5px 9px; border-radius:999px; background:#3b3021; color:#f0c986; }
+.segments { display:grid; gap:12px; }
+.segment-card { padding:18px; border:1px solid #30353a; border-radius:14px; background:#191c1f; }
+.segment-meta { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.segment-meta span { padding:5px 8px; border-radius:7px; background:#252a2e; font-size:12px; color:#cbd0d4; }
+.candidate { color:#8ce0bd !important; }
+.text { line-height:1.75; }
+button { color:#eef2f3; background:#2b3035; border:1px solid #444a50; border-radius:8px; padding:7px 11px; cursor:pointer; }
+button:hover { background:#384047; }
+.actions { display:flex; gap:8px; align-items:center; }
+.saved { color:#81d4b4; margin-left:8px; font-size:13px; }
+@media (max-width:720px) { header { position:static; display:block; } audio { width:100%; margin-top:14px; } .toolbar { display:grid; } select,input { width:100%; } }

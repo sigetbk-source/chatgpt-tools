@@ -1,0 +1,50 @@
+# macOS
+.DS_Store
+
+# Python environments and generated metadata
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# JavaScript dependencies
+node_modules/
+
+# Local credentials and environment settings
+.env
+.env.*
+!.env.example
+*credentials*
+*secret*
+*token*
+
+# Case-specific settings and generated work data
+projects/*.json
+work/
+
+# Generated media, Premiere data, transcripts, and logs
+*.wav
+*.wave
+*.mp3
+*.mp4
+*.mov
+*.mxf
+*.aif
+*.aiff
+*.prproj
+*.prtranscript
+*.srt
+*.log
+
+# Temporary and backup files
+*.tmp
+*.temp
+*.bak
+*.swp
+*~

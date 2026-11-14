@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <script src="bootstrap.js"></script>
+  <link rel="stylesheet" href="styles.css">
+  <title>Premiere制作支援</title>
+</head>
+<body>
+  <main id="app">
+    <div id="boot-status" style="margin-bottom:12px;padding:10px;border-radius:7px;background:#3d3420;color:#ffd98a;">
+      パネルを起動しています…
+    </div>
+    <header>
+      <div>
+        <h1>Premiere制作支援</h1>
+        <p>ナレーション制作と文字起こしを一つの入口から</p>
+      </div>
+      <div class="bridge-controls">
+        <span id="bridge-status" class="connection off">未接続</span>
+        <button id="start-bridge" class="secondary bridge-start">連携サーバーを起動</button>
+      </div>
+    </header>
+
+    <nav class="workspace-tabs" aria-label="制作機能">
+      <button class="workspace-tab active" data-workspace-tab="narration">ナレーション</button>
+      <button class="workspace-tab" data-workspace-tab="transcript">文字起こし</button>
+    </nav>
+
+    <div class="workspace" data-workspace="narration">
+      <section class="status-panel narration-panel">
+        <div class="section-heading">
+          <h2>ナレーション制作</h2>
+          <button id="open-narration" class="secondary">新しい案件を開始</button>
+        </div>
+        <p class="hint">新規生成、生成済み音声の修正、修正版台本との比較、Premiereへの再反映をここで行います。</p>
+        <div id="narration-diff" class="diff-panel" hidden></div>
+        <div id="narration-jobs" class="asset-list"><p class="empty">ナレーション制作はまだ開始していません</p></div>
+      </section>
+      <section class="compatibility-note">
+        <h2>SRT配置</h2>
+        <p class="hint">Premiere 25.6では、古いキャプショントラックを削除した後のSRT配置だけ「ナレーションTimeline配置」互換パネルを使用します。</p>
+      </section>
+    </div>
+
+    <div class="workspace" data-workspace="transcript" hidden>
+      <section class="status-panel">
+        <div class="section-heading">
+          <h2>処理状況</h2>
+          <button id="refresh-jobs" class="secondary">更新</button>
+        </div>
+        <div id="jobs" class="asset-list"><p class="empty">まだ処理はありません</p></div>
+      </section>
+
+      <section>
+        <div class="section-heading">
+          <h2>1. 案件資料</h2>
+          <button id="choose-reference" class="secondary">フォルダを選択</button>
+        </div>
+        <p id="reference-path" class="path">未指定</p>
+        <p class="hint">台本・PDF・TXT・CSVを再帰的に読み込み、案件辞書を作ります。</p>
+      </section>
+
+      <section>
+        <div class="section-heading">
+          <h2>2. 対象素材</h2>
+          <button id="scan" class="secondary">選択を読み込む</button>
+        </div>
+        <p class="hint">フォルダと素材を混ぜて選択できます。サブフォルダも対象です。</p>
+        <div id="selection-summary" class="summary">Premiereで対象を選択してください</div>
+        <div id="selected-assets" class="asset-list"></div>
+      </section>
+
+      <button id="start" class="primary" disabled>解析を開始</button>
+    </div>
+    <p id="message" class="message"></p>
+
+  </main>
+  <script src="diagnostics.js"></script>
+  <script src="index.js"></script>
+</body>
+</html>

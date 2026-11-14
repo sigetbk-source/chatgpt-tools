@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Premiere 話者修復</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <div>
+      <p class="eyebrow">PREMIERE SPEAKER REVIEW</p>
+      <h1 id="title">話者修復</h1>
+      <p id="summary">素材を読み込んでいます…</p>
+    </div>
+    <audio id="audio" src="/audio.mp3" controls preload="metadata"></audio>
+  </header>
+  <main>
+    <section class="toolbar">
+      <label>表示
+        <select id="filter">
+          <option value="unlocked">未確定のみ</option>
+          <option value="all">すべて</option>
+          <option value="locked">確定済みのみ</option>
+          <option value="change">区間内で話者交代候補</option>
+        </select>
+      </label>
+      <label>検索 <input id="search" type="search" placeholder="話者名・本文"></label>
+    </section>
+    <section id="diagnostics" class="diagnostics"></section>
+    <section id="segments" class="segments"></section>
+  </main>
+  <template id="segment-template">
+    <article class="segment-card">
+      <div class="segment-meta">
+        <button class="play">▶ 試聴</button>
+        <span class="time"></span>
+        <span class="original"></span>
+        <span class="candidate"></span>
+      </div>
+      <p class="text"></p>
+      <div class="actions">
+        <button data-status="approved">候補を承認</button>
+        <button data-status="hold">保留</button>
+        <button data-status="rejected">却下</button>
+        <span class="saved"></span>
+      </div>
+    </article>
+  </template>
+  <script src="/app.js"></script>
+</body>
+</html>

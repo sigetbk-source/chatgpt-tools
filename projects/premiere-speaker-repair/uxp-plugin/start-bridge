@@ -1,0 +1,22 @@
+#!/bin/bash
+set -eu
+
+PLUGIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(cd "$PLUGIN_DIR/.." && pwd)"
+LOG_DIR="$PROJECT_DIR/work/uxp/logs"
+mkdir -p "$LOG_DIR"
+
+if /usr/bin/curl -fsS --max-time 1 http://127.0.0.1:8878/api/health >/dev/null 2>&1; then
+  exit 0
+fi
+
+if [ -x "$PROJECT_DIR/.venv/bin/python" ]; then
+  PYTHON="$PROJECT_DIR/.venv/bin/python"
+else
+  PYTHON="/usr/bin/python3"
+fi
+
+cd "$PROJECT_DIR"
+/usr/bin/nohup "$PYTHON" -m speaker_repair.uxp_bridge \
+  >>"$LOG_DIR/bridge-launch.log" 2>&1 </dev/null &
+exit 0
