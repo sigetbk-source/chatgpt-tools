@@ -37,7 +37,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let result;
   let page = 0;
   let busy = false;
-  const submittedTargets = new Set();
+  const unresolvedTargets = new Set();
   const targetKey = target => JSON.stringify([target.projectPath, target.sequenceGuid]);
 
   function refreshButtons() {
@@ -46,7 +46,7 @@ document.addEventListener("DOMContentLoaded", () => {
     element("generate").disabled = busy || !source;
     element("save").disabled = busy || !result || !result.cues.length;
     element("bridge").disabled = busy;
-    element("place").disabled = busy || !result?.cues.length || !source?.target || submittedTargets.has(targetKey(source.target));
+    element("place").disabled = busy || !result?.cues.length || !source?.target || unresolvedTargets.has(targetKey(source.target));
     element("save-report").disabled = busy || !result;
     element("save-speakers").disabled = busy || !result || !result.bySpeaker.length;
     element("previous").disabled = !result || page === 0;
@@ -205,6 +205,7 @@ document.addEventListener("DOMContentLoaded", () => {
   addAction("place", async () => {
     const { target, stem } = source;
     const generated = result;
+    const key = targetKey(target);
     const token = localStorage.getItem(bridgeTokenKey);
     if (!token) throw new Error("先に「CEP連携フォルダを選ぶ」で待受フォルダを設定してください。");
     const root = await fs.getEntryForPersistentToken(token).catch(() => {
@@ -212,8 +213,9 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     element("status").textContent = target.sequenceName + " に字幕を配置しています…";
     const placed = await placement.placeCaptions({ ppro, target, root, result: generated, stem, format: storage.formats.utf8,
-      markSubmitted: () => submittedTargets.add(targetKey(target)),
-      markRejected: () => submittedTargets.delete(targetKey(target)) });
+      markSubmitted: () => unresolvedTargets.add(key),
+      markRejected: () => unresolvedTargets.delete(key) });
+    unresolvedTargets.delete(key);
     element("status").textContent = placed.sequenceName + " に字幕トラックを配置・保存しました。";
   });
   addAction("save-report", () => save(".review.json", "json", engine.report(result)));

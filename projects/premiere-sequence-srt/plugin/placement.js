@@ -36,7 +36,7 @@ async function placeCaptions({ ppro, target, root, result, stem, format,
     throw new Error("JSONを読み込んだときのシークエンスに戻してください。");
   }
   if (await target.sequence.getCaptionTrackCount() !== 0) {
-    throw new Error("配置テストは字幕トラックが0本のシークエンスで行ってください。");
+    throw new Error("このシークエンスには字幕トラックがあります。別の設定を試すには、字幕トラックが0本のテスト用シークエンスを開き、JSONを選び直してください。");
   }
   const duration = (await target.sequence.getEndTime()).seconds;
   if (!Number.isFinite(duration) || result.cues.some(cue => cue.end > duration * 1000 + 50)) {
