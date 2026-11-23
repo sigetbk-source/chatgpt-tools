@@ -30,7 +30,7 @@ function requestId() {
 
 async function placeCaptions({ ppro, target, root, result, stem, format,
   now = Date.now, delay = ms => new Promise(resolve => setTimeout(resolve, ms)),
-  nonce = requestId(), markSubmitted = () => {} }) {
+  nonce = requestId(), markSubmitted = () => {}, markRejected = () => {} }) {
   if (!result?.cues?.length) throw new Error("配置する字幕がありません。");
   if (!sameTarget(target, await readTarget(ppro))) {
     throw new Error("JSONを読み込んだときのシークエンスに戻してください。");
@@ -77,7 +77,16 @@ async function placeCaptions({ ppro, target, root, result, stem, format,
     if (responseFile) {
       const response = JSON.parse(await responseFile.read({ format }));
       if (response.nonce !== nonce) throw new Error("CEPの応答を照合できませんでした。タイムラインを確認してください。");
-      if (!response.ok) throw new Error("CEPで配置できませんでした。タイムラインを確認してください。 " + response.error);
+      if (!response.ok) {
+        if (response.result?.needsManualRecovery) {
+          throw new Error("CEPで配置できませんでした。タイムラインを確認してください。 " + response.error);
+        }
+        markRejected();
+        if (/^SyntaxError: Unexpected token E in JSON/.test(response.error)) {
+          throw new Error("CEPがPremiereの配置スクリプトを実行できませんでした。配置開始前のエラーです。");
+        }
+        throw new Error("CEPは配置を開始できませんでした。 " + response.error);
+      }
       if (!response.result?.created || !response.result?.saved || response.result.sequenceGuid !== target.sequenceGuid
         || response.result.projectPath !== target.projectPath || await target.sequence.getCaptionTrackCount() !== 1) {
         throw new Error("字幕トラックの配置結果を照合できませんでした。タイムラインを確認してください。");

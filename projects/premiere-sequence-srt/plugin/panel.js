@@ -212,7 +212,8 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     element("status").textContent = target.sequenceName + " に字幕を配置しています…";
     const placed = await placement.placeCaptions({ ppro, target, root, result: generated, stem, format: storage.formats.utf8,
-      markSubmitted: () => submittedTargets.add(targetKey(target)) });
+      markSubmitted: () => submittedTargets.add(targetKey(target)),
+      markRejected: () => submittedTargets.delete(targetKey(target)) });
     element("status").textContent = placed.sequenceName + " に字幕トラックを配置・保存しました。";
   });
   addAction("save-report", () => save(".review.json", "json", engine.report(result)));

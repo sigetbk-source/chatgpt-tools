@@ -91,3 +91,18 @@ test("CEPが応答しないときは送信済みのまま配置成功を返さ�
     markSubmitted: () => { submitted = true; } }), /応答がありません/);
   assert.equal(submitted, true);
 });
+
+test("CEPが配置開始前に拒否した場合だけ再試行できる", async () => {
+  for (const needsManualRecovery of [false, true]) {
+    const setup = fixture();
+    setup.outbox.getEntries = async () => [{ name: nonce + ".json", isFile: true, async read() {
+      return JSON.stringify({ nonce, ok: false, error: "SyntaxError: Unexpected token E in JSON at position 0",
+        result: needsManualRecovery ? { needsManualRecovery } : null });
+    } }];
+    const target = await readTarget(setup.ppro);
+    let rejected = false;
+    await assert.rejects(placeCaptions({ ...setup, target, result: generate(input), stem: "字幕", nonce,
+      markRejected: () => { rejected = true; } }), needsManualRecovery ? /タイムライン/ : /配置開始前/);
+    assert.equal(rejected, !needsManualRecovery);
+  }
+});
