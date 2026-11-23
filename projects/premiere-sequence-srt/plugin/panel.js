@@ -5,6 +5,7 @@ const fs = storage.localFileSystem;
 const engine = require("./engine.js");
 
 const fields = [
+  ["includeNarration", "ナレーションを含める"],
   ["maxChars", "1行の最大文字数"],
   ["maxLines", "1枚の最大行数（1〜2）"],
   ["periodThreshold", "句点の手前で空白結合できる文字数"],

@@ -48,6 +48,22 @@ test("ナレーションは元区間ごとに1枚とし、文字、句読点、�
   assert.deepEqual(lines(generate(named)), [["ナレーションです。"]]);
 });
 
+test("話者名と専用IDでナレーションを認識し、設定がオフならSRTから除外する", () => {
+  const labels = ["ナレーション", "ナレ", "N  ", " na ", "ＮＡ", "Narrator", "川辺ナレ担当"];
+  const data = source(...labels.map((name, i) => segment(String(i), word("例文。", i, 0.5))),
+    segment("00000000-0000-0000-0000-000000000001", word("専用ID。", 7)),
+    segment("N ", word("話者名のみ。", 8)));
+  data.speakers = labels.map((name, i) => ({ id: String(i), name }));
+  const included = generate(data);
+  assert.equal(included.cues.filter(cue => cue.narration).length, 8);
+  const excluded = generate(data, { includeNarration: false });
+  assert.deepEqual(excluded.cues, included.cues.filter(cue => !cue.narration));
+  assert.deepEqual(excluded.bySpeaker.map(group => group.name), ["川辺ナレ担当"]);
+  assert.doesNotMatch(excluded.srt, /専用ID|話者名のみ/);
+  assert.equal(generate(source(segment("ナレ", word("ナレーションだけ。"))),
+    { includeNarration: false }).srt, "");
+});
+
 test("3. 読点を空白にして結合し、25文字を超える場合は改行する", () => {
   assert.deepEqual(lines(subtitle("そうですね、これは面白いですね。")), [["そうですね これは面白いですね"]]);
   const phrase = "あ".repeat(19) + "、いうえおかき";

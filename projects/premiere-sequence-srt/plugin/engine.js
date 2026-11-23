@@ -4,7 +4,7 @@ const defaults = Object.freeze({
   maxChars: 25, maxLines: 2, periodThreshold: 10, periodCompactLimit: 15, joinShortPeriod: true,
   joinComma: true, maxSpaces: 1, breakQuestions: true, joinSameSpeaker: true,
   silenceMs: 650, sameSegmentSilenceMs: 5000, correctionMs: 40, detectOverlap: true, minCueMs: 300,
-  maxCueMs: 0, cueGapMs: 0,
+  maxCueMs: 0, cueGapMs: 0, includeNarration: true,
 });
 
 const labels = {
@@ -23,7 +23,7 @@ const closers = new Set(Array.from("」』】）》〉〕］｝’”）)]}"));
 const questions = new Set(Array.from("！？!?"));
 const particles = new Set(["は", "が", "を", "に", "で", "へ", "と", "も", "から", "まで", "より", "ので", "けど", "ね", "よ"]);
 const narrationId = "00000000-0000-0000-0000-000000000001";
-const narrationNames = new Set(["ナレーション", "ナレーター", "na", "narration", "narrator"]);
+const narrationNames = new Set(["ナレーション", "ナレーター", "ナレ", "n", "na", "narration", "narrator"]);
 const whitespace = /[ \t\u3000]/;
 const latin = /^[\p{Script=Latin}\p{Number}]$/u;
 const own = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
@@ -89,7 +89,8 @@ function parseTranscript(input, issues) {
     if (!seg || typeof seg !== "object" || Array.isArray(seg)) throw new Error("区間 " + (index + 1) + " が不正です");
     const segment = index + 1;
     const speaker = typeof seg.speaker === "string" && seg.speaker.trim() ? seg.speaker : null;
-    const narration = speaker === narrationId || narrationNames.has((names.get(speaker) || "").normalize("NFKC").trim().toLowerCase());
+    const speakerLabel = (names.get(speaker) ?? speaker ?? "").normalize("NFKC").trim().toLowerCase();
+    const narration = speaker === narrationId || narrationNames.has(speakerLabel);
     const entries = Array.isArray(seg.words) && seg.words.length
       ? seg.words : (typeof seg.text === "string" && seg.text.trim() ? [seg] : []);
     if (!entries.length && !Array.isArray(seg.words)) throw new Error("区間 " + segment + " に words または text がありません");
@@ -418,7 +419,9 @@ function generate(input, options) {
   const issues = [];
   const parsed = parseTranscript(input, issues);
   checkTiming(parsed.blocks, config, issues);
-  const cues = runs(parsed.blocks, config).flatMap(run => buildCues(run, config, issues))
+  const cues = runs(parsed.blocks, config)
+    .filter(run => config.includeNarration || run.narrationText == null)
+    .flatMap(run => buildCues(run, config, issues))
     .sort((a, b) => a.start - b.start);
   verifyCueTiming(cues, config, issues);
   issues.sort((a, b) => (a.start ?? Infinity) - (b.start ?? Infinity));
