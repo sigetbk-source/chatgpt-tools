@@ -3,7 +3,7 @@
 const defaults = Object.freeze({
   maxChars: 25, maxLines: 2, periodThreshold: 10, periodCompactLimit: 15, joinShortPeriod: true,
   joinComma: true, maxSpaces: 1, breakQuestions: true, joinSameSpeaker: true,
-  silenceMs: 650, correctionMs: 40, detectOverlap: true, minCueMs: 300,
+  silenceMs: 650, sameSegmentSilenceMs: 5000, correctionMs: 40, detectOverlap: true, minCueMs: 300,
   maxCueMs: 0, cueGapMs: 0,
 });
 
@@ -95,14 +95,11 @@ function parseTranscript(input, issues) {
     if (!entries.length && !Array.isArray(seg.words)) throw new Error("区間 " + segment + " に words または text がありません");
     const segmentTime = timedRange(seg);
     const words = [];
-    let blankRanges = [];
     entries.forEach((entry, i) => {
       if (!entry || typeof entry.text !== "string") throw new Error("区間 " + segment + " の語 " + (i + 1) + " に文字列がありません");
       inputWordCount++;
       if (!entry.text.trim()) {
         emptyWordCount++;
-        const time = timedRange(entry);
-        if (time) blankRanges.push(time);
         if (entry.eos === true && words.length) words[words.length - 1].eos = true;
         return;
       }
@@ -118,8 +115,7 @@ function parseTranscript(input, issues) {
           text: entry.text, detail: entry === seg ? "単語時刻なし" : "単語時刻が不正" });
       }
       words.push({ start: time[0], end: time[1], text: entry.text, segment, word: i + 1,
-        speaker, narration, eos: entry.eos === true, blankRanges, fallback: !direct || entry === seg });
-      blankRanges = [];
+        speaker, narration, eos: entry.eos === true, fallback: !direct || entry === seg });
     });
     if (!words.length) return;
     if (!speaker) issues.push({ code: "unknown_speaker", start: words[0].start, segment, text: words.map(word => word.text).join("") });
@@ -155,20 +151,10 @@ function checkTiming(blocks, config, issues) {
   }
 }
 
-function exceedsSilence(previous, word, threshold) {
+function exceedsSilence(previous, word, config) {
   const gap = word.start - previous.end;
-  if (gap <= 0 || gap < threshold) return false;
-  if (previous.eos || previous.segment !== word.segment) return true;
-  let covered = 0;
-  let coveredUntil = previous.end;
-  for (const [start, end] of word.blankRanges) {
-    const from = Math.max(start, coveredUntil);
-    const to = Math.min(end, word.start);
-    if (to <= from) continue;
-    covered += to - from;
-    coveredUntil = to;
-  }
-  return covered >= threshold || gap - covered >= threshold;
+  if (previous.segment === word.segment) return Math.round(gap) > config.sameSegmentSilenceMs;
+  return gap > 0 && gap >= config.silenceMs;
 }
 
 function runs(blocks, config) {
@@ -187,7 +173,7 @@ function runs(blocks, config) {
       const splitAtBlock = newBlock && (previous.eos || !word.speaker || !config.joinSameSpeaker);
       if (!run || word.speaker !== run.speaker || block.language !== run.language || splitAtBlock
         || word.fallback || previous.fallback || word.start < previous.start
-        || exceedsSilence(previous, word, config.silenceMs)) {
+        || exceedsSilence(previous, word, config)) {
         run = { speaker: word.speaker, language: block.language, words: [] };
         result.push(run);
       }

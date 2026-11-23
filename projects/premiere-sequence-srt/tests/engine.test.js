@@ -89,13 +89,13 @@ test("8. 同名でも話者IDが異なれば別字幕、話者不明は区間単
   assert.equal(result.issues.filter(issue => issue.code === "unknown_speaker").length, 2);
 });
 
-test("発言末尾で元区間が変わったら別字幕にし、次の区間の短い空欄をまたいでつなぐ", () => {
+test("発言末尾で元区間が変わったら別字幕にし、次の区間の空欄をまたいでつなぐ", () => {
   const data = source(segment("A", { ...word("窓が開いているようです。", 0, 1), eos: true }),
     segment("A", word("その先で", 1.1, 1.1), word("", 2.65, 0.27), word("楽団が演奏します", 2.92, 1)));
   const result = generate(data);
   assert.deepEqual(lines(result), [["窓が開いているようです"], ["その先で楽団が演奏します"]]);
   assert.deepEqual(result.cues.map(cue => [cue.start, cue.end]), [[0, 1000], [1100, 3920]]);
-  assert.deepEqual(lines(generate(source(segment("A", word("最初"), word("", 0.5, 0.8), word("後続", 1.3))))),
+  assert.deepEqual(lines(generate(source(segment("A", word("最初"), word("", 0.5, 5.2), word("後続", 5.7))))),
     [["最初"], ["後続"]]);
 });
 
@@ -130,8 +130,16 @@ test("11. 別話者が重なる場合は双方を維持し、話者別SRTにも�
   assert.match(renderSrt(result.bySpeaker[1].cues), /^1\n00:00:01,000 --> 00:00:01,500\n相づち/);
 });
 
-test("12. 指定値以上の正の無音区間で分割する", () => {
-  const data = source(segment("A", word("最初", 0, 0.5), word("後続", 1, 1)));
+test("12. 同じ元区間は無音5秒ちょうどまで結合し、5秒を超えたら分割する", () => {
+  const data = gap => source(segment("A", word("最初", 0, 0.5), word("後続", 0.5 + gap, 1)));
+  assert.deepEqual(lines(generate(data(0.8))), [["最初後続"]]);
+  assert.deepEqual(lines(generate(data(5))), [["最初後続"]]);
+  assert.deepEqual(lines(generate(data(5.001))), [["最初"], ["後続"]]);
+  assert.deepEqual(lines(generate(data(0.5), { sameSegmentSilenceMs: 500 })), [["最初後続"]]);
+});
+
+test("元区間をまたぐ無音分割の閾値は独立して適用する", () => {
+  const data = source(segment("A", word("最初", 0, 0.5)), segment("A", word("後続", 1, 1)));
   assert.deepEqual(lines(generate(data, { silenceMs: 500 })), [["最初"], ["後続"]]);
   assert.deepEqual(lines(generate(data, { silenceMs: 501 })), [["最初後続"]]);
 });
