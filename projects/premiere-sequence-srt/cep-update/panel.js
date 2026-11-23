@@ -15,8 +15,9 @@ function jsx(name, data) {
     const { projectPath, sequenceGuid, sequenceName, srtPath, expectedCaptionTrackCount, sourceTimeVerified } = data;
     const args = { projectPath, sequenceGuid, sequenceName, srtPath, expectedCaptionTrackCount, sourceTimeVerified };
     const call = '(function(){try{' +
-      'if(typeof captionPlacementProtocol!=="function" || captionPlacementProtocol()!==2){$.evalFile(new File(' +
+      'if(typeof captionPlacementProtocol!=="function" || captionPlacementProtocol()!==3){$.evalFile(new File(' +
       jsxLiteral(hostScript) + '));}' +
+      'if(typeof captionPlacementProtocol!=="function" || captionPlacementProtocol()!==3){return "CEP_ERROR:Caption host version mismatch";}' +
       'return ' + name + '(' + jsxLiteral(args) + ');' +
       '}catch(e){return "CEP_ERROR:"+String(e)+" (line "+e.line+")";}}())';
     cep.evalScript(call, raw => {
@@ -37,7 +38,7 @@ async function handle(request) {
   if (!p.projectPath || !p.sequenceGuid || !p.sequenceName || !p.srtPath ||
       !p.srtPath.toLowerCase().endsWith('.srt') || typeof p.expectedText !== 'string' ||
       !p.expectedText.trim() || p.sourceTimeVerified !== true ||
-      p.expectedCaptionTrackCount !== 0) throw Error('Incomplete caption target');
+      !Number.isInteger(p.expectedCaptionTrackCount) || p.expectedCaptionTrackCount < 0) throw Error('Incomplete caption target');
   if (await fs.promises.readFile(p.srtPath, 'utf8') !== p.expectedText) throw Error('SRT content mismatch');
   await jsx('captionPrepare', p);
   const backupPath = path.join(root, 'caption-backups', `${request.nonce}.prproj`);

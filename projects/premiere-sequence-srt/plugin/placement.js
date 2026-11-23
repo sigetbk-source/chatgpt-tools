@@ -35,8 +35,9 @@ async function placeCaptions({ ppro, target, root, result, stem, format,
   if (!sameTarget(target, await readTarget(ppro))) {
     throw new Error("JSONを読み込んだときのシークエンスに戻してください。");
   }
-  if (await target.sequence.getCaptionTrackCount() !== 0) {
-    throw new Error("このシークエンスには字幕トラックがあります。別の設定を試すには、字幕トラックが0本のテスト用シークエンスを開き、JSONを選び直してください。");
+  const expectedCaptionTrackCount = await target.sequence.getCaptionTrackCount();
+  if (!Number.isInteger(expectedCaptionTrackCount) || expectedCaptionTrackCount < 0) {
+    throw new Error("配置先の字幕トラック数を確認できませんでした。");
   }
   const duration = (await target.sequence.getEndTime()).seconds;
   if (!Number.isFinite(duration) || result.cues.some(cue => cue.end > duration * 1000 + 50)) {
@@ -56,13 +57,16 @@ async function placeCaptions({ ppro, target, root, result, stem, format,
   if (!sameTarget(target, await readTarget(ppro))) {
     throw new Error("SRT読み込み後に対象が切り替わりました。プロジェクトパネルで読み込まれたSRTを確認してください。");
   }
+  if (await target.sequence.getCaptionTrackCount() !== expectedCaptionTrackCount) {
+    throw new Error("字幕トラック数が途中で変わりました。タイムラインを確認してから再試行してください。");
+  }
 
   const deadlineMs = now() + 20000;
   const request = {
     version: 1, nonce, operation: "place_srt", deadlineMs,
     payload: {
       projectPath: target.projectPath, sequenceGuid: target.sequenceGuid, sequenceName: target.sequenceName,
-      srtPath: file.nativePath, expectedText: result.srt, expectedCaptionTrackCount: 0, sourceTimeVerified: true,
+      srtPath: file.nativePath, expectedText: result.srt, expectedCaptionTrackCount, sourceTimeVerified: true,
     },
   };
   const inbox = bridge["caption-inbox"];
@@ -85,13 +89,16 @@ async function placeCaptions({ ppro, target, root, result, stem, format,
         if (/^SyntaxError: Unexpected token E in JSON/.test(response.error)) {
           throw new Error("CEPがPremiereの配置スクリプトを実行できませんでした。配置開始前のエラーです。");
         }
+        if (expectedCaptionTrackCount > 0 && /Incomplete caption target/.test(response.error)) {
+          throw new Error("既存字幕があるシークエンスに追加するには、install.command でCEPを更新し、Premiereを再起動してください。");
+        }
         throw new Error("CEPは配置を開始できませんでした。 " + response.error);
       }
       if (!response.result?.created || !response.result?.saved || response.result.sequenceGuid !== target.sequenceGuid
-        || response.result.projectPath !== target.projectPath || await target.sequence.getCaptionTrackCount() !== 1) {
+        || response.result.projectPath !== target.projectPath || await target.sequence.getCaptionTrackCount() !== expectedCaptionTrackCount + 1) {
         throw new Error("字幕トラックの配置結果を照合できませんでした。タイムラインを確認してください。");
       }
-      return { sequenceName: target.sequenceName, srtPath: file.nativePath };
+      return { sequenceName: target.sequenceName, srtPath: file.nativePath, captionTrackCount: expectedCaptionTrackCount + 1 };
     }
     await delay(250);
   }

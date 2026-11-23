@@ -1,12 +1,20 @@
-function captionPlacementProtocol() { return 2; }
+function captionPlacementProtocol() { return 3; }
+
+function captionPlacementTarget(data) {
+    if (!data || data.sourceTimeVerified !== true || typeof data.expectedCaptionTrackCount !== "number" ||
+        !isFinite(data.expectedCaptionTrackCount) || data.expectedCaptionTrackCount < 0 ||
+        Math.floor(data.expectedCaptionTrackCount) !== data.expectedCaptionTrackCount) throw Error("Invalid caption track count");
+    if (!app.project || !app.project.path || String(app.project.path) !== String(data.projectPath)) throw Error("Wrong project");
+    var sequence = app.project.activeSequence;
+    if (!sequence || String(sequence.sequenceID) !== String(data.sequenceGuid) || String(sequence.name) !== String(data.sequenceName)) throw Error("Wrong active sequence");
+    if (sequence.captionTracks && typeof sequence.captionTracks.numTracks === "number" &&
+        sequence.captionTracks.numTracks !== data.expectedCaptionTrackCount) throw Error("Caption track count changed");
+    return sequence;
+}
 
 function captionPrepare(data) {
     try {
-        if (!data || data.sourceTimeVerified !== true || data.expectedCaptionTrackCount !== 0) throw Error("Source-time and empty-track check required");
-        if (!app.project || !app.project.path || String(app.project.path) !== String(data.projectPath)) throw Error("Wrong project");
-        var sequence = app.project.activeSequence;
-        if (!sequence || String(sequence.sequenceID) !== String(data.sequenceGuid) || String(sequence.name) !== String(data.sequenceName)) throw Error("Wrong active sequence");
-        if (sequence.captionTracks && sequence.captionTracks.numTracks !== 0) throw Error("Caption track already exists");
+        captionPlacementTarget(data);
         if (app.project.save() === false) throw Error("Project baseline save failed");
         return "OK";
     } catch (error) { return "CEP_ERROR:" + String(error); }
@@ -14,13 +22,9 @@ function captionPrepare(data) {
 
 function captionPlace(data) {
     try {
-        if (!data || data.sourceTimeVerified !== true || data.expectedCaptionTrackCount !== 0) throw Error("Source-time and empty-track check required");
-        if (!app.project || !app.project.path || String(app.project.path) !== String(data.projectPath)) throw Error("Wrong project");
-        var sequence = app.project.activeSequence;
-        if (!sequence || String(sequence.sequenceID) !== String(data.sequenceGuid) || String(sequence.name) !== String(data.sequenceName)) throw Error("Wrong active sequence");
+        var sequence = captionPlacementTarget(data);
         var file = new File(data.srtPath);
         if (!file.exists || !/\.srt$/i.test(data.srtPath)) throw Error("SRT missing");
-        if (sequence.captionTracks && sequence.captionTracks.numTracks !== 0) throw Error("Caption track already exists");
         // The caller has already copied and verified a saved project backup.
         var root = app.project.rootItem;
         function matches(item, path, found) {

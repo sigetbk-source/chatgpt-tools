@@ -14,8 +14,8 @@ const input = {
 };
 const nonce = "a".repeat(32);
 
-function fixture() {
-  let request, imported, count = 0, time = 0;
+function fixture(initialCount = 0) {
+  let request, imported, count = initialCount, time = 0;
   const file = (name, text) => ({
     isFile: true, name, nativePath: "/ipc/sequence-srt-assets/" + name,
     async read() { return text; },
@@ -53,13 +53,14 @@ function fixture() {
     async importFiles(paths) { [imported] = paths; return true; },
   };
   const ppro = { Project: { async getActiveProject() { return project; } } };
-  return { ppro, root, sequence, outbox, now: () => time, delay: async ms => { time += ms; },
+  return { ppro, project, root, sequence, outbox, now: () => time, delay: async ms => { time += ms; },
     getRequest: () => request, getImported: () => imported };
 }
 
 for (const includeNarration of [true, false]) {
   test("JSON読込からCEPへ配置依頼する（ナレーション" + (includeNarration ? "あり" : "なし") + "）", async () => {
-    const setup = fixture();
+    const existingCount = includeNarration ? 1 : 0;
+    const setup = fixture(existingCount);
     const result = generate(JSON.parse(JSON.stringify(input)), { includeNarration });
     const target = await readTarget(setup.ppro);
     const placed = await placeCaptions({ ...setup, target, result, stem: "字幕", nonce });
@@ -69,10 +70,22 @@ for (const includeNarration of [true, false]) {
     assert.equal(request.payload.expectedText, result.srt);
     assert.equal(request.payload.expectedText.includes("案内します。"), includeNarration);
     assert.equal(request.payload.sequenceGuid, "seq-1");
-    assert.equal(await setup.sequence.getCaptionTrackCount(), 1);
-    await assert.rejects(placeCaptions({ ...setup, target, result, stem: "字幕", nonce }), /0本/);
+    assert.equal(request.payload.expectedCaptionTrackCount, existingCount);
+    assert.equal(placed.captionTrackCount, existingCount + 1);
+    assert.equal(await setup.sequence.getCaptionTrackCount(), existingCount + 1);
   });
 }
+
+test("SRTの読み込み中に字幕トラック数が変わった場合はCEPに送信しない", async () => {
+  const setup = fixture(1);
+  const target = await readTarget(setup.ppro);
+  setup.project.importFiles = async () => {
+    setup.sequence.getCaptionTrackCount = async () => 2;
+    return true;
+  };
+  await assert.rejects(placeCaptions({ ...setup, target, result: generate(input), stem: "字幕", nonce }), /途中で変わりました/);
+  assert.equal(setup.getRequest(), undefined);
+});
 
 test("対象の切替を検知し、SRT読み込み前に中止する", async () => {
   const setup = fixture();

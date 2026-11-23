@@ -216,7 +216,7 @@ document.addEventListener("DOMContentLoaded", () => {
       markSubmitted: () => unresolvedTargets.add(key),
       markRejected: () => unresolvedTargets.delete(key) });
     unresolvedTargets.delete(key);
-    element("status").textContent = placed.sequenceName + " に字幕トラックを配置・保存しました。";
+    element("status").textContent = placed.sequenceName + " に字幕トラックを追加・保存しました（計 " + placed.captionTrackCount + " 本）。";
   });
   addAction("save-report", () => save(".review.json", "json", engine.report(result)));
   addAction("save-speakers", async () => {
