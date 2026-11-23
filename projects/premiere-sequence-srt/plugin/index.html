@@ -10,6 +10,14 @@
     <div class="actions">
       <sp-checkbox id="include-narration" checked>ナレーションを含める</sp-checkbox>
     </div>
+    <div class="setting">
+      <span class="setting-label">最低表示秒数（0＝無効）</span>
+      <sp-textfield id="minimum-display-seconds" aria-label="最低表示秒数（0＝無効）"></sp-textfield>
+    </div>
+    <div class="setting">
+      <span class="setting-label">字幕つなぎ（f）</span>
+      <sp-textfield id="join-gap-frames" aria-label="字幕つなぎの最大フレーム数（0＝無効）"></sp-textfield>
+    </div>
     <div class="actions">
       <sp-button id="open" variant="secondary">JSONを選ぶ</sp-button>
       <sp-button id="generate" variant="accent" disabled>生成</sp-button>

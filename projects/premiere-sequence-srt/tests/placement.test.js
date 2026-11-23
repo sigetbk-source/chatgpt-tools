@@ -3,7 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { generate } = require("../plugin/engine.js");
-const { placeCaptions, readTarget } = require("../plugin/placement.js");
+const { placeCaptions, readTarget, readVideoTimeline } = require("../plugin/placement.js");
 
 const input = {
   speakers: [{ id: "a", name: "出演者" }, { id: "n", name: "ＮＡ " }],
@@ -57,6 +57,84 @@ function fixture(initialCount = 0) {
     getRequest: () => request, getImported: () => imported };
 }
 
+test("最上段の映像が切り替わる点を取得し、ミュートしたトラックは除外する", async () => {
+  const setup = fixture();
+  const time = seconds => ({ seconds });
+  const clip = (start, end) => ({ getStartTime: () => time(start), getEndTime: () => time(end) });
+  const tracks = [{
+    isMuted: async () => false,
+    getTrackItems(type, includeEmpty) {
+      assert.equal(type, 1);
+      assert.equal(includeEmpty, false);
+      return [clip(1.2345, 2), clip(0, 1.2345)];
+    },
+  }, {
+    isMuted: async () => true,
+    getTrackItems() { assert.fail("ミュートしたトラックを読み込んだ"); },
+  }, {
+    isMuted: async () => false,
+    getTrackItems() { return [clip(1, 1.5)]; },
+  }];
+  setup.ppro.Constants = { TrackItemType: { CLIP: 1 } };
+  setup.sequence.getVideoTrackCount = async () => tracks.length;
+  setup.sequence.getVideoTrack = async index => tracks[index];
+  setup.sequence.getAudioTrackCount = async () => 1;
+  let audioClips = [clip(0, 2.5)];
+  setup.sequence.getAudioTrack = async () => ({
+    isMuted: async () => false,
+    getTrackItems: () => audioClips,
+  });
+  const target = await readTarget(setup.ppro);
+  assert.deepEqual(await readVideoTimeline(setup.ppro, target), { endMs: 3000, cuts: [0, 1000] });
+  audioClips = [clip(0, 1.5006), clip(1.5006, 2.5)];
+  assert.deepEqual(await readVideoTimeline(setup.ppro, target), { endMs: 3000, cuts: [0, 1000, 1500] });
+  setup.sequence.guid = "seq-2";
+  await assert.rejects(readVideoTimeline(setup.ppro, target), /シークエンスに戻してください/);
+});
+
+test("発話終了と同じフレームの映像カットで止め、上段のテキストを無視して次の字幕まで延長する", async () => {
+  const setup = fixture();
+  const clip = (start, end) => ({
+    getStartTime: () => ({ seconds: start }),
+    getEndTime: () => ({ seconds: end }),
+  });
+  const track = clips => ({ isMuted: () => false, getTrackItems: () => clips });
+  const cut = 134.200733;
+  const title = clip(180, 188.4883);
+  title.getComponentChain = async () => ({
+    getComponentCount: () => 2,
+    getComponentAtIndex: index => ({ getMatchName: async () => ["AE.ADBE Motion", "AE.ADBE Text"][index] }),
+  });
+  setup.ppro.Constants = { TrackItemType: { CLIP: 1 } };
+  setup.sequence.getEndTime = () => ({ seconds: 200 });
+  setup.sequence.getVideoTrackCount = () => 2;
+  setup.sequence.getVideoTrack = index => [
+    track([clip(0, cut), clip(cut, 200)]), track([title]),
+  ][index];
+  setup.sequence.getAudioTrackCount = () => 1;
+  setup.sequence.getAudioTrack = () => track([clip(0, cut), clip(cut, 188.4883), clip(188.4883, 200)]);
+  const timeline = await readVideoTimeline(setup.ppro, await readTarget(setup.ppro));
+  assert.deepEqual(timeline.cuts, [0, 134201, 200000]);
+  const segments = [
+    ["a", "先の発話。", 132.768, 1.433], ["n", "次の発話。", 135.087, 1],
+    ["a", "あとの発話。", 185.350, 1.110], ["n", "その次の発話。", 188.710, 1],
+  ].map(([speaker, text, start, duration]) => ({ speaker, words: [{ text, start, duration }] }));
+  const result = generate({ speakers: input.speakers, segments }, { extendShortCueMs: 4000 }, timeline);
+  assert.equal(result.cues[0].end, 134201);
+  assert.equal(result.cues[2].end, 188710);
+  title.getComponentChain = async () => { throw new Error("component chain unavailable"); };
+  const fallback = await readVideoTimeline(setup.ppro, await readTarget(setup.ppro));
+  assert.deepEqual(fallback.cuts, [0, 134201, 180000, 188488, 200000]);
+  setup.sequence.getTimebase = () => "8475667200";
+  setup.ppro.TickTime = { createWithTicks(ticks) {
+    assert.equal(ticks, "8475667200");
+    return { seconds: 1001 / 30000 };
+  } };
+  const frames = await readVideoTimeline(setup.ppro, await readTarget(setup.ppro), true);
+  assert.ok(Math.abs(frames.frameMs - 1001 / 30) < 0.000001);
+  assert.deepEqual(frames.visibleSpans, [[0, 134201], [134201, 180000], [180000, 188488], [188488, 200000]]);
+});
+
 for (const includeNarration of [true, false]) {
   test("JSON読込からCEPへ配置依頼する（ナレーション" + (includeNarration ? "あり" : "なし") + "）", async () => {
     const existingCount = includeNarration ? 1 : 0;
@@ -103,6 +181,32 @@ test("CEPが応答しないときは送信済みのまま配置成功を返さ�
   await assert.rejects(placeCaptions({ ...setup, target, result: generate(input), stem: "字幕", nonce,
     markSubmitted: () => { submitted = true; } }), /応答がありません/);
   assert.equal(submitted, true);
+});
+
+test("保存・バックアップに33秒かかってもCEPの配置結果を受け取れる", async () => {
+  const setup = fixture(1);
+  const getEntries = setup.outbox.getEntries;
+  setup.outbox.getEntries = async () => setup.now() < 33000 ? [] : getEntries();
+  const target = await readTarget(setup.ppro);
+  const placed = await placeCaptions({ ...setup, target, result: generate(input), stem: "字幕", nonce });
+  assert.equal(setup.getRequest().deadlineMs, 120000);
+  assert.equal(setup.now(), 33000);
+  assert.equal(placed.captionTrackCount, 2);
+});
+
+test("保存・バックアップ中に期限切れになった場合は配置を再試行できる", async () => {
+  const setup = fixture();
+  setup.outbox.getEntries = async () => {
+    if (setup.now() < setup.getRequest().deadlineMs + 1000) return [];
+    return [{ name: nonce + ".json", isFile: true, async read() {
+      return JSON.stringify({ nonce, ok: false, error: "Error: Request expired before caption placement" });
+    } }];
+  };
+  const target = await readTarget(setup.ppro);
+  let rejected = false;
+  await assert.rejects(placeCaptions({ ...setup, target, result: generate(input), stem: "字幕", nonce,
+    markRejected: () => { rejected = true; } }), /字幕を追加する前に中断/);
+  assert.equal(rejected, true);
 });
 
 test("CEPが配置開始前に拒否した場合だけ再試行できる", async () => {

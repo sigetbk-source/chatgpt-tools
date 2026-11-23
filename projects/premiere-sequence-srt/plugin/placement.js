@@ -1,6 +1,8 @@
 "use strict";
 
 const bridgeFolders = ["caption-inbox", "caption-outbox", "caption-claims", "caption-backups"];
+const placementDeadlineMs = 120000; // Maximum request window accepted by CEP.
+const responseGraceMs = 5000;
 
 async function readTarget(ppro) {
   const project = await ppro.Project.getActiveProject();
@@ -13,6 +15,94 @@ async function readTarget(ppro) {
 function sameTarget(left, right) {
   return left.projectPath === right.projectPath && left.sequenceGuid === right.sequenceGuid
     && left.sequenceName === right.sequenceName;
+}
+
+function sequenceMilliseconds(time) {
+  const ms = Math.round(time?.seconds * 1000);
+  if (!Number.isSafeInteger(ms) || ms < 0) throw new Error("シークエンスの映像カット時刻を取得できませんでした。");
+  return ms;
+}
+
+async function isTextGraphic(item) {
+  try {
+    const chain = await item.getComponentChain?.();
+    if (!chain) return false;
+    const count = chain.getComponentCount();
+    for (let index = 0; index < count; index++) {
+      const component = chain.getComponentAtIndex(index);
+      if (await component?.getMatchName() === "AE.ADBE Text") return true;
+    }
+  } catch {
+    // An unreadable component chain does not establish that the clip is text.
+  }
+  return false;
+}
+
+async function readVideoTimeline(ppro, target, includeFrameGaps = false) {
+  const targetChanged = "JSONを読み込んだときのシークエンスに戻してください。";
+  if (!target || !sameTarget(target, await readTarget(ppro))) throw new Error(targetChanged);
+  const { sequence } = target;
+  const endMs = sequenceMilliseconds(await sequence.getEndTime());
+  let frameMs;
+  if (includeFrameGaps) {
+    frameMs = ppro.TickTime.createWithTicks(await sequence.getTimebase()).seconds * 1000;
+    if (!Number.isFinite(frameMs) || frameMs <= 0) throw new Error("シークエンスのフレームレートを取得できませんでした。");
+  }
+  const edits = new Map();
+  function addEdit(time, clip, starts) {
+    if (!edits.has(time)) edits.set(time, []);
+    edits.get(time).push({ clip, starts });
+  }
+  const trackCount = await sequence.getVideoTrackCount();
+  if (!Number.isSafeInteger(trackCount) || trackCount < 0) throw new Error("映像トラック数を取得できませんでした。");
+  for (let index = 0; index < trackCount; index++) {
+    const track = await sequence.getVideoTrack(index);
+    if (await track.isMuted()) continue;
+    for (const item of await track.getTrackItems(ppro.Constants.TrackItemType.CLIP, false)) {
+      const start = sequenceMilliseconds(await item.getStartTime());
+      const end = sequenceMilliseconds(await item.getEndTime());
+      if (end <= start) continue;
+      if (await isTextGraphic(item)) continue;
+      const clip = { trackIndex: index, start };
+      addEdit(start, clip, true);
+      addEdit(end, clip, false);
+    }
+  }
+  const audioEdges = new Set();
+  const audioTrackCount = await sequence.getAudioTrackCount();
+  if (!Number.isSafeInteger(audioTrackCount) || audioTrackCount < 0) throw new Error("音声トラック数を取得できませんでした。");
+  for (let index = 0; index < audioTrackCount; index++) {
+    const track = await sequence.getAudioTrack(index);
+    if (await track.isMuted()) continue;
+    for (const item of await track.getTrackItems(ppro.Constants.TrackItemType.CLIP, false)) {
+      audioEdges.add(sequenceMilliseconds(await item.getStartTime()));
+      audioEdges.add(sequenceMilliseconds(await item.getEndTime()));
+    }
+  }
+  if (!sameTarget(target, await readTarget(ppro))) throw new Error(targetChanged);
+  const cuts = [];
+  const visibleSpans = [];
+  const active = new Set();
+  let previous = null;
+  let visibleStart = 0;
+  for (const time of [...edits.keys()].sort((a, b) => a - b)) {
+    for (const { clip, starts } of edits.get(time)) {
+      if (starts) active.add(clip);
+      else active.delete(clip);
+    }
+    let visible = null;
+    for (const clip of active) {
+      if (!visible || clip.trackIndex > visible.trackIndex
+        || (clip.trackIndex === visible.trackIndex && clip.start > visible.start)) visible = clip;
+    }
+    if (visible === previous) continue;
+    const nearbyAudioEdge = audioEdges.has(time - 1) || audioEdges.has(time) || audioEdges.has(time + 1);
+    if (visible?.start === time || nearbyAudioEdge) cuts.push(time);
+    if (includeFrameGaps && previous) visibleSpans.push([visibleStart, time]);
+    previous = visible;
+    visibleStart = time;
+  }
+  return includeFrameGaps ? { endMs, cuts, frameMs, visibleSpans } : { endMs, cuts };
 }
 
 async function readBridge(root) {
@@ -61,7 +151,7 @@ async function placeCaptions({ ppro, target, root, result, stem, format,
     throw new Error("字幕トラック数が途中で変わりました。タイムラインを確認してから再試行してください。");
   }
 
-  const deadlineMs = now() + 20000;
+  const deadlineMs = now() + placementDeadlineMs;
   const request = {
     version: 1, nonce, operation: "place_srt", deadlineMs,
     payload: {
@@ -76,7 +166,7 @@ async function placeCaptions({ ppro, target, root, result, stem, format,
   await pending.moveTo(inbox, { newName: nonce + ".json", overwrite: false });
   markSubmitted();
 
-  while (now() < deadlineMs + 2000) {
+  while (now() < deadlineMs + responseGraceMs) {
     const responseFile = (await outbox.getEntries()).find(entry => entry.name === nonce + ".json" && entry.isFile);
     if (responseFile) {
       const response = JSON.parse(await responseFile.read({ format }));
@@ -92,6 +182,9 @@ async function placeCaptions({ ppro, target, root, result, stem, format,
         if (expectedCaptionTrackCount > 0 && /Incomplete caption target/.test(response.error)) {
           throw new Error("既存字幕があるシークエンスに追加するには、install.command でCEPを更新し、Premiereを再起動してください。");
         }
+        if (response.error === "Error: Request expired before caption placement") {
+          throw new Error("プロジェクトの保存・バックアップに時間がかかったため、字幕を追加する前に中断しました。再試行するか、保存したSRTを手動で配置してください。");
+        }
         throw new Error("CEPは配置を開始できませんでした。 " + response.error);
       }
       if (!response.result?.created || !response.result?.saved || response.result.sequenceGuid !== target.sequenceGuid
@@ -105,4 +198,4 @@ async function placeCaptions({ ppro, target, root, result, stem, format,
   throw new Error("CEPの応答がありません。CEPパネルの待受とタイムラインを確認してください。");
 }
 
-module.exports = { readTarget, readBridge, placeCaptions };
+module.exports = { readTarget, readVideoTimeline, readBridge, placeCaptions };

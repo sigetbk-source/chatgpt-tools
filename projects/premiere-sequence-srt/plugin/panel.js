@@ -6,6 +6,16 @@ const engine = require("./engine.js");
 const placement = require("./placement.js");
 const ppro = require("premierepro");
 const bridgeTokenKey = "sequence-srt-caption-bridge";
+const minimumDisplayKey = "sequence-srt-minimum-display-seconds";
+const joinGapKey = "sequence-srt-join-gap-frames";
+
+function readTimingValue(value, decimal = false) {
+  const text = value?.trim() ?? "";
+  const pattern = decimal ? /^\d+(?:\.\d{1,3})?$/ : /^\d+$/;
+  if (!pattern.test(text)) return null;
+  const number = Number(text);
+  return number <= (decimal ? 3600 : 3600000) ? number : null;
+}
 
 const fields = [
   ["maxChars", "1行の最大文字数"],
@@ -30,18 +40,30 @@ document.addEventListener("DOMContentLoaded", () => {
   const element = id => document.getElementById(id);
   const settings = Object.create(null);
   const narrationControl = element("include-narration");
+  const minimumDisplayControl = element("minimum-display-seconds");
+  const joinGapControl = element("join-gap-frames");
+  const defaultMinimumDisplaySeconds = String(engine.defaults.extendShortCueMs / 1000);
+  const defaultJoinGapFrames = String(engine.defaults.joinGapFrames);
+  const storedMinimum = readTimingValue(localStorage.getItem(minimumDisplayKey), true);
+  const storedGap = readTimingValue(localStorage.getItem(joinGapKey));
+  minimumDisplayControl.value = storedMinimum == null ? defaultMinimumDisplaySeconds : String(storedMinimum);
+  joinGapControl.value = storedGap == null ? defaultJoinGapFrames : String(storedGap);
   narrationControl.checked = engine.defaults.includeNarration;
   settings.includeNarration = narrationControl;
   const pageSize = 12;
   let source;
   let result;
+  let videoTimeline;
   let page = 0;
   let busy = false;
   const unresolvedTargets = new Set();
   const targetKey = target => JSON.stringify([target.projectPath, target.sequenceGuid]);
 
   function refreshButtons() {
-    narrationControl.disabled = busy;
+    for (const control of Object.values(settings)) control.disabled = busy;
+    minimumDisplayControl.disabled = busy;
+    joinGapControl.disabled = busy;
+    element("reset").disabled = busy;
     element("open").disabled = busy;
     element("generate").disabled = busy || !source;
     element("save").disabled = busy || !result || !result.cues.length;
@@ -75,6 +97,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function invalidate() {
     result = null;
+    videoTimeline = null;
     page = 0;
     element("result").textContent = "";
     rows("subtitle-preview", [], "sample");
@@ -104,6 +127,15 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   narrationControl.addEventListener("change", settingsChanged);
+  function bindTimingPreference(control, key, decimal) {
+    control.addEventListener("input", () => {
+      const value = readTimingValue(control.value, decimal);
+      if (value != null) localStorage.setItem(key, String(value));
+      settingsChanged();
+    });
+  }
+  bindTimingPreference(minimumDisplayControl, minimumDisplayKey, true);
+  bindTimingPreference(joinGapControl, joinGapKey, false);
   for (const [key, label] of fields) {
     const isBoolean = typeof engine.defaults[key] === "boolean";
     const control = document.createElement(isBoolean ? "sp-checkbox" : "sp-textfield");
@@ -134,6 +166,10 @@ document.addEventListener("DOMContentLoaded", () => {
     element("show-settings").textContent = show ? "設定を閉じる" : "設定を開く";
   });
   element("reset").addEventListener("click", () => {
+    minimumDisplayControl.value = defaultMinimumDisplaySeconds;
+    joinGapControl.value = defaultJoinGapFrames;
+    localStorage.removeItem(minimumDisplayKey);
+    localStorage.removeItem(joinGapKey);
     for (const [key, control] of Object.entries(settings)) {
       const value = engine.defaults[key];
       if (typeof value === "boolean") control.checked = value;
@@ -164,7 +200,12 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   addAction("generate", async () => {
-    const options = { includeNarration: Boolean(narrationControl.checked) };
+    const seconds = readTimingValue(minimumDisplayControl.value, true);
+    const joinGapFrames = readTimingValue(joinGapControl.value);
+    if (seconds == null) throw new Error("最低表示秒数を入力してください（例 2.5）。");
+    if (joinGapFrames == null) throw new Error("字幕つなぎは整数のフレーム数を入力してください（例 3）。");
+    const options = { includeNarration: Boolean(narrationControl.checked),
+      extendShortCueMs: Math.round(seconds * 1000), joinGapFrames };
     for (const [key, label] of fields) {
       const control = settings[key];
       if (typeof engine.defaults[key] === "boolean") options[key] = Boolean(control.checked);
@@ -174,8 +215,14 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
     invalidate();
-    result = engine.generate(source.data, options);
-    element("result").textContent = result.stats.cues + "枚｜話者ID " + result.stats.speakers + "件｜要確認 " + result.issues.length + "件";
+    if (options.extendShortCueMs || joinGapFrames) {
+      element("status").textContent = "映像のカット位置を読み込んでいます…";
+      videoTimeline = await placement.readVideoTimeline(ppro, source.target, joinGapFrames > 0);
+    }
+    result = engine.generate(source.data, options, videoTimeline);
+    const belowMinimum = result.cues.filter(cue => cue.end - cue.start < options.extendShortCueMs).length;
+    element("result").textContent = result.stats.cues + "枚｜話者ID " + result.stats.speakers + "件｜要確認 " + result.issues.length + "件"
+      + (options.extendShortCueMs ? "｜" + options.extendShortCueMs / 1000 + "秒未満 " + belowMinimum + "枚" : "");
     rows("subtitle-preview", result.cues.slice(0, 3).map(cue =>
       engine.timecode(cue.start) + " – " + engine.timecode(cue.end) + "\n" + cue.lines.join("\n")), "sample");
     element("status").textContent = result.cues.length ? "生成しました。" : "保存できる字幕がありません。";
@@ -211,6 +258,13 @@ document.addEventListener("DOMContentLoaded", () => {
     const root = await fs.getEntryForPersistentToken(token).catch(() => {
       throw new Error("CEP連携フォルダを開けません。もう一度選んでください。");
     });
+    if (videoTimeline) {
+      const current = await placement.readVideoTimeline(ppro, target, videoTimeline.frameMs != null);
+      if (JSON.stringify(current) !== JSON.stringify(videoTimeline)) {
+        invalidate();
+        throw new Error("映像のカット位置かシークエンスの尺が変わりました。字幕を再生成してください。");
+      }
+    }
     element("status").textContent = target.sequenceName + " に字幕を配置しています…";
     const placed = await placement.placeCaptions({ ppro, target, root, result: generated, stem, format: storage.formats.utf8,
       markSubmitted: () => unresolvedTargets.add(key),

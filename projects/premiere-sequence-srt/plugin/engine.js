@@ -4,7 +4,7 @@ const defaults = Object.freeze({
   maxChars: 25, maxLines: 2, periodThreshold: 10, periodCompactLimit: 15, joinShortPeriod: true,
   joinComma: true, maxSpaces: 1, breakQuestions: true, joinSameSpeaker: true,
   silenceMs: 650, sameSegmentSilenceMs: 5000, correctionMs: 40, detectOverlap: true, minCueMs: 300,
-  maxCueMs: 0, cueGapMs: 0, includeNarration: true,
+  maxCueMs: 0, cueGapMs: 0, includeNarration: true, extendShortCueMs: 0, joinGapFrames: 0,
 });
 
 const labels = {
@@ -353,7 +353,6 @@ function buildCues(run, config, issues) {
     const start = Math.round(prev && prev.word === first.word ? first.start : first.word.start);
     const sourceEnd = Math.round(next && next.word === last.word ? last.end : last.word.end);
     const end = Math.max(start + 1, sourceEnd);
-    if (end - start < config.minCueMs) issues.push({ code: "short_cue", start, end, speaker: run.speaker, text: text.join("\n") });
     if (config.maxCueMs && end - start > config.maxCueMs) issues.push({ code: "long_cue", start, end, speaker: run.speaker, text: text.join("\n") });
     if (sourceEnd <= start) issues.push({ code: "time_adjusted", start, end, speaker: run.speaker, detail: "正のSRT表示時間を確保" });
     cues.push({ start, end, speaker: run.speaker, lines: text });
@@ -414,7 +413,59 @@ function verifyCueTiming(cues, config, issues) {
   }
 }
 
-function generate(input, options) {
+function joinCueGaps(cues, config, timeline) {
+  if (!Number.isFinite(timeline?.frameMs) || timeline.frameMs <= 0 || !Array.isArray(timeline.visibleSpans)) {
+    throw new Error("字幕つなぎには、Premiereで対象シークエンスのフレームレートと映像クリップが必要です。");
+  }
+  if (config.cueGapMs) return;
+  const maxGap = Math.ceil(config.joinGapFrames * timeline.frameMs);
+  const spans = timeline.visibleSpans;
+  let spanIndex = 0;
+  for (let index = 0; index + 1 < cues.length; index++) {
+    const cue = cues[index], next = cues[index + 1];
+    const gap = next.start - cue.end;
+    if (gap <= 0) continue;
+    // SRT times are in milliseconds. Also count the frame boundaries in the gap.
+    const frameGap = Math.ceil(next.start / timeline.frameMs) - Math.ceil(cue.end / timeline.frameMs);
+    if (gap > maxGap && frameGap > config.joinGapFrames) continue;
+    if (config.maxCueMs && next.start - cue.start > config.maxCueMs) continue;
+    while (spans[spanIndex]?.[1] < cue.end) spanIndex++;
+    const span = spans[spanIndex];
+    if (span && span[0] < cue.end && next.start < span[1]) cue.end = next.start;
+  }
+}
+
+function extendShortCues(cues, config, timeline) {
+  if (!Number.isSafeInteger(timeline?.endMs) || timeline.endMs < 0 || !Array.isArray(timeline.cuts)
+    || timeline.cuts.some(cut => !Number.isSafeInteger(cut) || cut < 0)) {
+    throw new Error("短い字幕を延長するには、Premiereで対象シークエンスの映像カット位置を読み込んでください。");
+  }
+  const cuts = [...timeline.cuts].sort((a, b) => a - b);
+  const extensionLimits = new Map();
+  let cutIndex = 0;
+  for (const [index, cue] of cues.entries()) {
+    if (cue.end - cue.start >= config.extendShortCueMs) continue;
+    while (cuts[cutIndex] <= cue.start) cutIndex++;
+    let upcomingCut = cutIndex;
+    while (cuts[upcomingCut] < cue.end) upcomingCut++;
+    const next = cues[index + 1];
+    const nextLimit = next ? next.start - config.cueGapMs : Infinity;
+    const durationLimit = config.maxCueMs ? cue.start + config.maxCueMs : Infinity;
+    const targetEnd = cue.start + config.extendShortCueMs;
+    const cutLimit = cuts[upcomingCut] ?? Infinity;
+    const limit = Math.min(targetEnd, timeline.endMs, nextLimit, cutLimit, durationLimit);
+    if (limit > cue.end) cue.end = limit;
+    if (limit < targetEnd) {
+      const reasons = [[nextLimit, "次の字幕"], [cutLimit, "映像の切り替わり"],
+        [timeline.endMs, "シークエンスの終端"], [durationLimit, "最長表示の設定"]];
+      const reason = reasons.find(([time]) => time === limit)[1];
+      extensionLimits.set(cue, reason + "で延長を制限");
+    }
+  }
+  return extensionLimits;
+}
+
+function generate(input, options, timeline) {
   const config = settings(options);
   const issues = [];
   const parsed = parseTranscript(input, issues);
@@ -423,7 +474,17 @@ function generate(input, options) {
     .filter(run => config.includeNarration || run.narrationText == null)
     .flatMap(run => buildCues(run, config, issues))
     .sort((a, b) => a.start - b.start);
+  const extensionLimits = config.extendShortCueMs ? extendShortCues(cues, config, timeline) : null;
+  if (config.joinGapFrames) joinCueGaps(cues, config, timeline);
   verifyCueTiming(cues, config, issues);
+  for (const cue of cues) {
+    const { start, end, speaker, lines, narration } = cue;
+    const minimum = narration ? config.extendShortCueMs : Math.max(config.minCueMs, config.extendShortCueMs);
+    if (end - start < minimum) {
+      const detail = extensionLimits?.get(cue);
+      issues.push({ code: "short_cue", start, end, speaker, text: lines.join("\n"), ...(detail && { detail }) });
+    }
+  }
   issues.sort((a, b) => (a.start ?? Infinity) - (b.start ?? Infinity));
   const speakers = new Map();
   for (const cue of cues) {

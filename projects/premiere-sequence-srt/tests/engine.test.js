@@ -14,6 +14,55 @@ const source = (...segments) => ({
 const subtitle = (text, config) => generate(source(segment("A", word(text, 0, 3))), config);
 const lines = (result) => result.cues.map(cue => cue.lines);
 
+test("同じ映像クリップ内で設定フレーム数以内の空きだけを詰める", () => {
+  const input = source(segment("A", word("はい。", 0.1, 0.4)), segment("B", word("続きです。", 0.601, 0.7)));
+  const timeline = { frameMs: 1001 / 30, visibleSpans: [[0, 2000]] };
+  const firstEnd = (options, context = timeline) => generate(input, options, context).cues[0].end;
+  assert.equal(firstEnd({ joinGapFrames: 3 }), 601);
+  assert.equal(firstEnd({ joinGapFrames: 2 }), 500);
+  assert.equal(firstEnd({ joinGapFrames: 3 }, { ...timeline, visibleSpans: [[0, 580], [580, 2000]] }), 500);
+  assert.equal(firstEnd({ joinGapFrames: 3 }, { ...timeline, visibleSpans: [[0, 580], [590, 2000]] }), 500);
+  assert.equal(firstEnd({ joinGapFrames: 3, cueGapMs: 50 }), 500);
+});
+
+test("最低表示4秒に延ばした後に残った同じクリップ内の1フレームを詰める", () => {
+  const input = source(segment("A", word("先の発話。", 373.253, 2.45)), segment("B", word("次の発話。", 377.298, 6.81)));
+  const config = { extendShortCueMs: 4000, joinGapFrames: 1 };
+  const timeline = { endMs: 390000, cuts: [], frameMs: 1001 / 30, visibleSpans: [[372339, 374040], [374040, 384751]] };
+  const result = generate(input, config, timeline);
+  assert.deepEqual(result.cues.slice(0, 2).map(({ start, end }) => [start, end]), [[373253, 377298], [377298, 384108]]);
+  assert.equal(generate(input, config, { ...timeline, cuts: [377253], visibleSpans: [[372339, 377253], [377253, 384751]] }).cues[0].end, 377253);
+  assert.equal(generate(input, config, { ...timeline, cuts: [377280], visibleSpans: [[372339, 377280], [377280, 384751]] }).cues[0].end, 377253);
+});
+
+test("指定秒数未満の字幕は指定秒数と次の字幕の開始の早い方まで延長する", () => {
+  const input = source(segment("A", word("はい。", 0, 0.4)), segment("B", word("続きです。", 3, 2.5)));
+  const result = generate(input, { extendShortCueMs: 2500 }, { endMs: 8000, cuts: [0] });
+  assert.deepEqual(result.cues.map(({ start, end }) => [start, end]), [[0, 2500], [3000, 5500]]);
+  assert.match(result.srt, /00:00:00,000 --> 00:00:02,500/);
+  const earlyNext = generate(input, { extendShortCueMs: 4000 }, { endMs: 8000, cuts: [0] });
+  assert.equal(earlyNext.cues[0].end, 3000);
+  assert.ok(earlyNext.issues.some(issue => issue.code === "short_cue" && issue.detail.includes("次の字幕")));
+  assert.equal(generate(input).cues[0].end, 400);
+});
+
+test("発話中に通過済みのカットは飛ばし、発話終了以降のカットで延長を止める", () => {
+  const input = source(segment("A", word("はい。", 0, 0.4)), segment("B", word("続きです。", 3, 1)));
+  const options = { extendShortCueMs: 2500 };
+  const result = generate(input, options, { endMs: 8000, cuts: [4500, 1500, 0, 4500] });
+  assert.deepEqual(result.cues.map(({ end }) => end), [1500, 4500]);
+  assert.equal(generate(input, options, { endMs: 8000, cuts: [200] }).cues[0].end, 2500);
+  assert.equal(generate(input, options, { endMs: 8000, cuts: [200, 400] }).cues[0].end, 400);
+});
+
+test("最後の字幕は設定秒数とシークエンス終端で制限し、既存の重複は維持する", () => {
+  const input = source(segment("A", word("はい。", 0, 0.8)), segment("B", word("続きです。", 0.5, 0.3)));
+  const options = { extendShortCueMs: 2000 };
+  assert.deepEqual(generate(input, options, { endMs: 1300, cuts: [] }).cues.map(({ end }) => end), [800, 1300]);
+  assert.equal(generate(input, options, { endMs: 9000, cuts: [] }).cues[1].end, 2500);
+  assert.throws(() => generate(input, options), /映像カット位置/);
+});
+
 test("1. 句点前が11文字以上かつ結合後16文字以上なら句点を削除して改行する", () => {
   assert.deepEqual(lines(subtitle("一二三四五六七八九十甲。天地人空海。")), [["一二三四五六七八九十甲", "天地人空海"]]);
 });
