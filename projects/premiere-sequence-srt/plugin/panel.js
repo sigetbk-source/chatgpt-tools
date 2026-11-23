@@ -8,7 +8,6 @@ const ppro = require("premierepro");
 const bridgeTokenKey = "sequence-srt-caption-bridge";
 
 const fields = [
-  ["includeNarration", "ナレーションを含める"],
   ["maxChars", "1行の最大文字数"],
   ["maxLines", "1枚の最大行数（1〜2）"],
   ["periodThreshold", "句点の手前で空白結合できる文字数"],
@@ -30,6 +29,9 @@ const fields = [
 document.addEventListener("DOMContentLoaded", () => {
   const element = id => document.getElementById(id);
   const settings = Object.create(null);
+  const narrationControl = element("include-narration");
+  narrationControl.checked = engine.defaults.includeNarration;
+  settings.includeNarration = narrationControl;
   const pageSize = 12;
   let source;
   let result;
@@ -39,6 +41,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const targetKey = target => JSON.stringify([target.projectPath, target.sequenceGuid]);
 
   function refreshButtons() {
+    narrationControl.disabled = busy;
     element("open").disabled = busy;
     element("generate").disabled = busy || !source;
     element("save").disabled = busy || !result || !result.cues.length;
@@ -94,6 +97,13 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  function settingsChanged() {
+    if (!source) return;
+    invalidate();
+    element("status").textContent = "設定を変更しました。再生成してください。";
+  }
+
+  narrationControl.addEventListener("change", settingsChanged);
   for (const [key, label] of fields) {
     const isBoolean = typeof engine.defaults[key] === "boolean";
     const control = document.createElement(isBoolean ? "sp-checkbox" : "sp-textfield");
@@ -114,11 +124,7 @@ document.addEventListener("DOMContentLoaded", () => {
       row.appendChild(control);
       element("settings").appendChild(row);
     }
-    control.addEventListener(isBoolean ? "change" : "input", () => {
-      if (!source) return;
-      invalidate();
-      element("status").textContent = "設定を変更しました。再生成してください。";
-    });
+    control.addEventListener(isBoolean ? "change" : "input", settingsChanged);
   }
 
   element("show-settings").addEventListener("click", () => {
@@ -158,7 +164,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   addAction("generate", async () => {
-    const options = {};
+    const options = { includeNarration: Boolean(narrationControl.checked) };
     for (const [key, label] of fields) {
       const control = settings[key];
       if (typeof engine.defaults[key] === "boolean") options[key] = Boolean(control.checked);
