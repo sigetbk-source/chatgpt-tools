@@ -3,6 +3,9 @@
 const storage = require("uxp").storage;
 const fs = storage.localFileSystem;
 const engine = require("./engine.js");
+const placement = require("./placement.js");
+const ppro = require("premierepro");
+const bridgeTokenKey = "sequence-srt-caption-bridge";
 
 const fields = [
   ["includeNarration", "ナレーションを含める"],
@@ -32,11 +35,15 @@ document.addEventListener("DOMContentLoaded", () => {
   let result;
   let page = 0;
   let busy = false;
+  const submittedTargets = new Set();
+  const targetKey = target => JSON.stringify([target.projectPath, target.sequenceGuid]);
 
   function refreshButtons() {
     element("open").disabled = busy;
     element("generate").disabled = busy || !source;
     element("save").disabled = busy || !result || !result.cues.length;
+    element("bridge").disabled = busy;
+    element("place").disabled = busy || !result?.cues.length || !source?.target || submittedTargets.has(targetKey(source.target));
     element("save-report").disabled = busy || !result;
     element("save-speakers").disabled = busy || !result || !result.bySpeaker.length;
     element("previous").disabled = !result || page === 0;
@@ -135,9 +142,12 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!file) return;
     const data = engine.parseJson(await file.read({ format: storage.formats.utf8 }));
     if (!Array.isArray(data?.segments)) throw new Error("Premiereの文字起こしJSONを選択してください");
-    source = { data, path: file.nativePath, stem: engine.outputStem(data, file.name) };
+    const target = await placement.readTarget(ppro).catch(() => null);
+    source = { data, path: file.nativePath, stem: engine.outputStem(data, file.name), target };
     invalidate();
     element("file-info").textContent = file.name + "｜" + data.segments.length + "区間";
+    element("placement-target").textContent = target ? "配置先: " + target.sequenceName
+      : "配置するには対象シークエンスを開いてからJSONを選んでください。";
     const previews = data.segments.slice(0, 3).map(segment => {
       const text = Array.isArray(segment?.words) ? segment.words.map(word => word?.text ?? "").join("") : segment?.text ?? "";
       const name = Array.isArray(data.speakers) ? data.speakers.find(s => s?.id === segment?.speaker)?.name : "";
@@ -178,6 +188,27 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   addAction("save", () => save(".srt", "srt", result.srt));
+  addAction("bridge", async () => {
+    const root = await fs.getFolder();
+    if (!root) return;
+    await placement.readBridge(root);
+    localStorage.setItem(bridgeTokenKey, await fs.createPersistentToken(root));
+    element("status").textContent = "CEP連携フォルダを設定しました。";
+  });
+
+  addAction("place", async () => {
+    const { target, stem } = source;
+    const generated = result;
+    const token = localStorage.getItem(bridgeTokenKey);
+    if (!token) throw new Error("先に「CEP連携フォルダを選ぶ」で待受フォルダを設定してください。");
+    const root = await fs.getEntryForPersistentToken(token).catch(() => {
+      throw new Error("CEP連携フォルダを開けません。もう一度選んでください。");
+    });
+    element("status").textContent = target.sequenceName + " に字幕を配置しています…";
+    const placed = await placement.placeCaptions({ ppro, target, root, result: generated, stem, format: storage.formats.utf8,
+      markSubmitted: () => submittedTargets.add(targetKey(target)) });
+    element("status").textContent = placed.sequenceName + " に字幕トラックを配置・保存しました。";
+  });
   addAction("save-report", () => save(".review.json", "json", engine.report(result)));
   addAction("save-speakers", async () => {
     const groups = result.bySpeaker;
