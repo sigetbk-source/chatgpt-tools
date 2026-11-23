@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="panel.css">
+  <script src="panel.js"></script>
+</head>
+<body>
+  <div class="panel">
+    <div class="actions">
+      <sp-button id="open" variant="secondary">JSONを選ぶ</sp-button>
+      <sp-button id="generate" variant="accent" disabled>生成</sp-button>
+      <sp-button id="save" variant="secondary" disabled>SRTを保存</sp-button>
+    </div>
+    <div id="status">テキストパネルから書き出した文字起こしJSONを選んでください。</div>
+    <div id="file-info"></div>
+    <div id="source-preview"></div>
+    <sp-divider></sp-divider>
+    <div class="actions">
+      <sp-button id="show-settings" size="s" variant="secondary">設定を開く</sp-button>
+    </div>
+    <div id="settings-section" style="display: none">
+      <div id="settings"></div>
+      <sp-button id="reset" size="s" variant="secondary">初期値に戻す</sp-button>
+    </div>
+    <sp-divider></sp-divider>
+    <div id="result"></div>
+    <div id="subtitle-preview"></div>
+    <div class="actions">
+      <sp-button id="save-report" size="s" variant="secondary" disabled>確認レポートを保存</sp-button>
+      <sp-button id="save-speakers" size="s" variant="secondary" disabled>話者別SRTを保存</sp-button>
+    </div>
+    <div id="review"></div>
+    <div class="actions">
+      <sp-button id="previous" size="s" variant="secondary" disabled>前へ</sp-button>
+      <sp-button id="next" size="s" variant="secondary" disabled>次へ</sp-button>
+    </div>
+  </div>
+</body>
+</html>

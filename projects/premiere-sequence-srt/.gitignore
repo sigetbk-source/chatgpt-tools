@@ -1,0 +1,6 @@
+sample/
+output/
+*.srt
+*.review.json
+*.zip
+.DS_Store
