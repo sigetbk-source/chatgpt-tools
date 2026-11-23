@@ -1,18 +1,23 @@
-# シークエンス SRT 配置テスト v0.1.3
+# 編集済みシークエンス SRT v0.2.0
 
 Premiere Proで編集中のシークエンスから手動で書き出した文字起こしJSONを、独自の整形ルールでUTF-8のSRTに変換します。UXPパネルとコマンドラインで同じ生成エンジンを使います。
 
+## 初回セットアップ
+
+1. 正式版の `.ccx` を開き、Creative Cloudデスクトップアプリでインストールします。ソースから開発・検証する場合はUXP Developer Toolsで `plugin/manifest.json` を追加してロードします。
+2. Premiereで **ウィンドウ → エクステンション → Transcript Caption Placement** を開き、「待受中」と表示されたら待受フォルダのパスを確認します。
+3. **ウィンドウ → UXPプラグイン → 編集済みシークエンス SRT** を開き、**CEP連携フォルダを選ぶ** で同じフォルダを指定します。連携フォルダは次回起動にも引き継がれます。テスト版から移行したとき、フォルダを移動したとき、アクセス権や保存した設定が失われたときは選び直してください。
+
+既存の **Transcript Caption Placement** が複数字幕トラックの追加に対応済みであれば、そのまま使えます。古い版を更新する場合は、同梱の `cep-update/install.command` を実行し、Premiereを再起動してください。インストーラーは既存のCEP拡張機能を更新し、更新前のファイルを拡張機能フォルダの隣に退避します。
+
 ## Premiereで使う
 
-1. Premiere Pro 25.6系で **ウィンドウ → エクステンション → Transcript Caption Placement** を開き、待受フォルダを確認します。保存先にアクセスできる状態でパネルを開いておきます。
-2. UXP Developer Toolsで `plugin/manifest.json` を追加してロードし、**ウィンドウ → UXPプラグイン → シークエンス SRT 配置テスト** を開きます。初回だけ **CEP連携フォルダを選ぶ** で、CEPに表示された待受フォルダを指定します。
-3. テスト対象をタイムラインで開き、同じ編集内容・尺のシークエンスから書き出した文字起こしJSONを **JSONを選ぶ** で読み込みます。JSONと表示された配置先の対応を確認してください。
-4. パネル上部の **ナレーションを含める** をオンまたはオフにして **生成 → このシークエンスに配置** を実行します。同じシークエンスで逆の設定を生成し、別の字幕トラックとして追加できます。
-5. 字幕トラックが1本増え、先頭の字幕が映像・音声と合っていることを確認します。設定を変えた場合は再生成してください。
+1. Premiere起動後、直接配置する前にCEPの「待受中」を確認します。ワークスペースから復元されていなければ、その起動中に一度開きます。通常利用ではUXP Developer Toolsのロード操作は不要です。
+2. 配置先のシークエンスをタイムラインで開き、そのシークエンスから手動で書き出した文字起こしJSONを **JSONを選ぶ** で読み込みます。
+3. パネル上部の **ナレーションを含める** をオンまたはオフにして **生成 → このシークエンスに配置** を実行します。設定を変えた場合は再生成します。
+4. 字幕トラックが1本増え、先頭の字幕が映像・音声と合っていることを確認します。同じシークエンスで逆の設定を生成し、さらに別の字幕トラックとして追加できます。
 
-「このシークエンスに配置」を押すと、SRTをCEP待受フォルダ直下の `sequence-srt-assets` に保存してプロジェクトへ読み込みます。CEPが字幕トラックを追加してプロジェクトを保存し、UXPが配置後の字幕トラック数を照合します。字幕があるシークエンスへの追加には、同梱の `cep-update/install.command` によるCEPの更新が必要です。
-
-CEPが配置スクリプトを実行できない場合は、同梱の `cep-update/install.command` でインストール済みの **Transcript Caption Placement** を更新し、Premiereを再起動します。更新前のCEPファイルは拡張機能フォルダの隣に退避されます。更新版は配置用のホストスクリプトを必要に応じて読み込み、ExtendScriptには配置に必要な情報だけを渡します。配置開始前の拒否はパネルから再試行できます。
+「このシークエンスに配置」を押すと、SRTをCEP待受フォルダ直下の `sequence-srt-assets` に保存してプロジェクトへ読み込みます。CEPが字幕トラックを追加してプロジェクトを保存し、UXPが配置後の字幕トラック数を照合します。配置開始前に拒否された場合は、原因を解消してパネルから再試行できます。
 
 ## コマンドラインで使う
 
@@ -56,8 +61,9 @@ node cli.js "/path/to/文字起こし.json" --out-dir "./output" --name "シー�
 
 - `plugin/engine.js` — JSON解析、話者分割、整形、時刻、SRTと確認レポート
 - `plugin/manifest.json`、`plugin/index.html`、`plugin/panel.js`、`plugin/panel.css` — Premiere UXPパネル
+- `plugin/placement.js`、`cep-update/` — CEP連携と字幕トラックへの配置
 - `cli.js` — ファイル出力と話者別出力
-- `tests/engine.test.js`、`tests/cli.test.js` — 仕様12項目と追加検証
+- `tests/` — 字幕整形、CLI出力、配置処理の自動テスト
 
 ```bash
 node --test tests/*.test.js
@@ -65,10 +71,10 @@ node --test tests/*.test.js
 
 公開版の自動テストは合成データを使用します。実案件の入力JSON、生成SRT、確認レポートは各案件で管理してください。既存STTの `premiere_export.py` で書き出し構造を照合し、`srt_layout.py` のUnicode文字境界の考え方を再利用しました。
 
-v0.1.0ではPremiere Pro 25.6.6のパネルで実データの選択からSRT保存まで確認しました。v0.1.2ではCLIで新しいルールを適用し、実データの出力を検証しました。v0.1.2のパネル保存と、タイムライン上の映像・音声との同期は確認が残っています。
+v0.2.0はPremiere Pro 25.6.6でナレーションの有無を切り替えて配置し、既存の字幕トラックがあるシークエンスにも新しい字幕トラックとして追加できることを確認しました。
 
 ## 次の検証
 
 1. SRTを元シークエンスに重ねて時刻を按分した箇所と短い相づちを確認する。
 2. 同時発話のあるシークエンスで、主SRTの重複表示と話者別ファイルの使い分けを確認する。
-3. シークエンス文字起こしの自動取得と、字幕の自動読み込み・配置を検討する。Adobeの公開UXPリファレンスで `Transcript.exportToJSON()` の対象は `ClipProjectItem`。[Adobe Transcript API](https://developer.adobe.com/premiere-pro/uxp/ppro-reference/classes/transcript/)
+3. シークエンス文字起こしの自動取得を検討する。Adobeの公開UXPリファレンスで `Transcript.exportToJSON()` の対象は `ClipProjectItem`。[Adobe Transcript API](https://developer.adobe.com/premiere-pro/uxp/ppro-reference/classes/transcript/)
