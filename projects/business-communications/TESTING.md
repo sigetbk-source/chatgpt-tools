@@ -21,7 +21,7 @@ PythonテストはHTTPハンドラーの入力・応答をメモリ上で検証�
 LINE接続前に、専用GASに `ENVIRONMENT=test` と `TEST_ROOT_ID` だけを設定して `runSyntheticTextTest` または `runSyntheticAttachmentTest` を実行できる。LINE通信と定期トリガー登録を伴わず、非公開のテストルートに合成データを保存する。テキストは台帳の重複排除と原文ログを、添付は同名2件と名前なし1件のDrive ID、名前、MIMEとバイト列を照合する。初回はテストGASの権限を確認する。
 
 1. マイドライブに非公開の `業務連絡管理（テスト専用）` フォルダを用意する。新しいスタンドアロンApps Scriptに `Code.gs` と `appsscript.json` を配置して、Advanced Sheetsサービスを有効にする。既存の案件管理GASとは別プロジェクトとする。
-2. 専用GASのスクリプトプロパティに `ENVIRONMENT=test`、`TEST_ROOT_ID`、`TEST_BOT_ID`、`WORKER_SECRET`、`LINE_TEST_ACCESS_TOKEN` を設定する。ワーカー共有鍵は新規の十分にランダムな32文字以上。bot IDとトークンはテストチャネルの組を使う。
+2. 専用GASのスクリプトプロパティに `ENVIRONMENT=test`、`TEST_ROOT_ID`、`WORKER_SECRET`、`LINE_TEST_ACCESS_TOKEN` と、テストチャネルの `TEST_BOT_BASIC_ID` を設定する。ワーカー共有鍵は新規の十分にランダムな32文字以上。 `configureTestBotIdentity` を実行し、トークンのBotとベーシックIDが一致する場合に `TEST_BOT_ID` を取得する。
 3. `setupTestStorage` を実行する。テスト用ルートに受信スプレッドシート、原文ログ／受信ファイルの子フォルダを作成し、テストGASに処理トリガーを登録する。Webアプリは所有者として実行し、署名付きPOSTだけ業務処理を通す。Apps ScriptのURLは `/exec` を用いる。
 4. Cloudflare WorkersのFreeプランを使う場合は、`edge/` のWrangler設定からデプロイする。コンテナのHTTPSホストを使う場合は、ルートのDockerfileから立ち上げる。いずれも秘密領域に `GAS_WORKER_URL`、`GAS_WORKER_SECRET`、`LINE_TEST_CHANNEL_SECRET`、`LINE_TEST_BOT_ID` を設定する。GAS側と中継側の共有鍵を一致させる。ホスト側でTLSを終端し、Webhook本文・リクエストヘッダーをログに出さない。
 5. テスト用LINEのWebhook URLに `/line/webhook` を設定してVerifyを実行する。再配信設定を確認し、合成テキスト、画像、同名PDFを送って、テスト台帳の行、Driveファイル、エラー状態を確認する。検証後に停止する場合はテスト用のWebhook設定とテストGASのトリガーだけを対象とする。

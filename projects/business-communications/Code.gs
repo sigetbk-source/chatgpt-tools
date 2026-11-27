@@ -21,6 +21,23 @@ function postResult_(ok) {
   return ContentService.createTextOutput(JSON.stringify({ok})).setMimeType(ContentService.MimeType.JSON);
 }
 
+function configureTestBotIdentity() {
+  const config = storageSettings_();
+  if (!/^@[A-Za-z0-9_-]+$/.test(config.TEST_BOT_BASIC_ID || '') || !config.LINE_TEST_ACCESS_TOKEN) {
+    throw new Error('test_bot_credentials_required');
+  }
+  const response = UrlFetchApp.fetch('https://api.line.me/v2/bot/info', {
+    headers: {Authorization: 'Bearer ' + config.LINE_TEST_ACCESS_TOKEN},
+    followRedirects: false, muteHttpExceptions: true,
+  });
+  if (response.getResponseCode() !== 200) throw new Error('line_bot_info_unavailable');
+  const bot = JSON.parse(response.getContentText());
+  if (bot.basicId !== config.TEST_BOT_BASIC_ID || !/^U[0-9a-f]{32}$/.test(bot.userId || '')) {
+    throw new Error('line_test_bot_mismatch');
+  }
+  PropertiesService.getScriptProperties().setProperty('TEST_BOT_ID', bot.userId);
+}
+
 function doPost(e) {
   try {
     const config = storageSettings_();
