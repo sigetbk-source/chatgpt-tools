@@ -21,5 +21,10 @@ Pythonクライアントは `LINE_SEND_TEST_URL`、`LINE_SEND_CLIENT_ID`、`LINE
 /System/Library/Frameworks/JavaScriptCore.framework/Versions/A/Helpers/jsc sender/Code.gs sender/test_sender.js
 ```
 
+### 本人宛てテキストの実機試験（2026-11-27）
+
+- テスト専用Apps Scriptで1件を送信キューに登録し、本人の許可を受けて承認・送信した。LINE Messaging APIは初回のリクエストにHTTP 200を返し、台帳に「API受付成功」と試行回数1を記録した。
+- 受信者本人がLINEアプリでテストメッセージの着信を確認した。試験後に `ENABLE_TEST_PUSH` を解除した。署名付きPOSTによる外部クライアント接続、Driveリンクの実送信、定期起動は実機未検証。
+
 - [LINE Messaging APIリファレンス](https://developers.line.biz/en/reference/messaging-api/)
 - [LINEのAPI再試行](https://developers.line.biz/en/docs/messaging-api/retrying-api-request/)
