@@ -14,7 +14,7 @@ python3 -B -m unittest -v test_relay
 node edge/test_worker.mjs
 ```
 
-PythonテストはHTTPハンドラーの入力・応答をメモリ上で検証する。Apps Script側はGoogle／LINEサービスの代替実装で複数イベント、重複、同名、保存待ち、障害後の再開、署名エンベロープ判定を検証する。実機の署名、添付形式、遅延、Google API権限は別途確認する。
+PythonテストはHTTPハンドラーの入力・応答をメモリ上で検証する。Apps Script側はGoogle／LINEサービスの代替実装で複数イベント、重複、同名、保存待ち、障害後の再開、署名エンベロープ判定を検証する。
 
 ## テスト環境へ導入
 
@@ -26,9 +26,15 @@ LINE接続前に、専用GASに `ENVIRONMENT=test` と `TEST_ROOT_ID` だけを�
 4. Cloudflare WorkersのFreeプランを使う場合は、`edge/` のWrangler設定からデプロイする。コンテナのHTTPSホストを使う場合は、ルートのDockerfileから立ち上げる。いずれも秘密領域に `GAS_WORKER_URL`、`GAS_WORKER_SECRET`、`LINE_TEST_CHANNEL_SECRET`、`LINE_TEST_BOT_ID` を設定する。GAS側と中継側の共有鍵を一致させる。ホスト側でTLSを終端し、Webhook本文・リクエストヘッダーをログに出さない。
 5. テスト用LINEのWebhook URLに `/line/webhook` を設定してVerifyを実行する。再配信設定を確認し、合成テキスト、画像、同名PDFを送って、テスト台帳の行、Driveファイル、エラー状態を確認する。検証後に停止する場合はテスト用のWebhook設定とテストGASのトリガーだけを対象とする。
 
+## テスト用LINEでの実受信（2026-11-27）
+
+- Cloudflare Workerと専用Apps Scriptをデプロイし、LINE DevelopersのWebhook検証に成功した。設定の再表示でWebhookが有効であることを確認した。
+- LINEアプリから送信したテキスト1件と画像2件を受信した。台帳の3件が「保存済み」になり、Driveに原文3件と画像ファイル2件があることを照合した。
+- 検証範囲はテスト用LINE、テスト台帳、テスト用Driveフォルダ。
+
 ## 未検証
 
-GAS／中継の実デプロイとテストLINE疎通、添付が大きい場合のストリーミング、取戻しイベント時の閲覧制限・保管期限、媒体別の取得期限、受信者プロフィールの補完、台帳件数増加時の運用。Apps ScriptのURL Fetch応答上限を超える添付はこの段階では保存失敗として記録する。LINEの送信、案件管理、カレンダー、業務Driveの変更は受信処理の経路に含まれない。
+実際のLINEからの再配信と大容量添付の処理、画像以外の形式、取戻しイベント時の閲覧制限・保管期限、媒体別の取得期限、受信者プロフィールの補完、台帳件数増加時の運用、本番環境。Apps ScriptのURL Fetch応答上限を超える添付はこの段階では保存失敗として記録する。LINEの送信、案件管理、カレンダー、業務Driveの変更は受信処理の経路に含まれない。
 
 - [LINE Webhook署名検証](https://developers.line.biz/en/docs/messaging-api/verify-webhook-signature/)
 - [Apps Scriptウェブアプリ](https://developers.google.com/apps-script/guides/web)
