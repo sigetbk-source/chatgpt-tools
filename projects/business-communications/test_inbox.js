@@ -28,7 +28,7 @@ function mockFolder(path) {
       const name = typeof blob === 'string' ? blob : blob.name;
       check(!contents.has(name), 'overwrote existing file');
       const id = 'file-' + (++filesWritten);
-      const file = {getId: () => id, getUrl: () => 'https://example.test/' + id,
+      const file = {getId: () => id, getUrl: () => 'https://example.test/' + id, getSharingAccess: () => 'private',
         getBlob: () => ({getDataAsString: () => text}), setContent: value => { text = value; }};
       contents.set(name, file);
       return file;
@@ -46,7 +46,7 @@ const ContentService = {createTextOutput: value => ({setMimeType: () => JSON.par
 const Utilities = {
   formatDate: () => '2026-11', Charset: {UTF_8: 'UTF-8'},
   base64Encode: value => value, computeHmacSha256Signature: () => 'a'.repeat(44),
-  base64Decode: value => value, newBlob: value => ({getDataAsString: () => value}),
+  base64Decode: value => value, newBlob: value => ({getDataAsString: () => value, getBytes: () => value}),
 };
 const PropertiesService = {getScriptProperties: () => ({getProperties: () => config})};
 const LockService = {getScriptLock: () => ({
@@ -166,4 +166,16 @@ const oldColumns = JSON.stringify(rows[0]);
 check(backfillTestInboxRouting() === 1 && backfillTestInboxRouting() === 0, 'routing migration must be idempotent');
 check(JSON.stringify(rows[0].slice(0, LEGACY_HEADERS.length)) === oldColumns &&
   rows[0][COL['受信経路詳細']] === '一般グループ', 'migration reconstructed source without changing original columns');
+const authorizedPhoto = eventRow_({webhookEventId: 'test-image', type: 'message', timestamp: now.getTime(),
+  source: {type: 'group', userId: ownerId, groupId}, message: {type: 'image', id: '8765'}}, now, config);
+authorizedPhoto[COL['原文ファイルID']] = 'archive-test-image';
+rows.push(authorizedPhoto);
+const beforeSave = buildTestOcrInbox_(rows, config);
+check(beforeSave.entries.length === 1 && beforeSave.entries[0].attachment_path === null, 'pending image in test OCR snapshot');
+authorizedPhoto[COL['保存状態']] = '保存済み';
+authorizedPhoto[COL['DriveファイルID']] = 'image-drive-id';
+check(publishTestOcrInbox() === 1 && publishTestOcrInbox() === 1 && filesWritten === 8, 'one scoped test snapshot');
+const published = JSON.parse(DriveApp.getFolderById('root').getFilesByName(OCR_INBOX_FILE).next().getBlob().getDataAsString());
+check(published.entries[0].attachment_path.join('/') === '受信ファイル/2026-11/test-image_image' &&
+  !('原文保存待ち' in published.entries[0].record), 'scoped attachment path and minimal manifest');
 print('Inbox tests passed');

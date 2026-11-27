@@ -50,3 +50,16 @@ python3 workflow/tasks.py /path/to/test.sqlite3 add-screenshot /path/to/screensh
 判断結果をGoogleカレンダーやNotionに反映するには、実サービスの読取アダプターと、承認済みの実行アダプターを追加する。Google People連携、自動取込、モデルAPI接続、実際の書き込みは未実装。
 
 本人のMacのターミナルで、実際のLINEスクショからVisionが文字と座標を取得できることを確認した。会話抽出・日時候補・時刻対応は実際の配置を再現したデータで検証した。Workの実行環境ではVisionがエラーを返すため、OCRを含む自動実行は未検証。
+
+## Drive同期によるOCRの自動取込（テスト）
+
+受信用GASの `enableTestOcrInbox` を実行すると、テスト専用Drive直下の `ocr-inbox-test.json` に認可済みグループ投稿の必要項目を保存する。専用トリガーが1分間隔で更新する。既存の受信履歴とWebhookのバージョンはそのまま利用する。停止するときは `publishTestOcrInbox` のトリガーだけを削除する。
+
+Macでは、Drive for desktopが同期するテスト専用フォルダと、同期外にある本人のみの出力フォルダを指定する。
+
+```sh
+python3 -B workflow/ocr_inbox.py "/path/to/業務連絡管理（テスト専用）" "/path/to/private-reviews" \
+  --ocr /path/to/business-screenshot-ocr --watch
+```
+
+`--watch` は30秒おきの確認を続ける。OSで定期起動する場合は `--watch` を外して一回ずつ実行する。添付が同期するまで確認レポートの確定を待ち、同じ画像・同じOCRバイナリの認識結果を再利用する。OCR障害は画像ごとに記録し、5分以上空けて再試行する。SQLiteに履歴を残し、確認レポートJSONは連絡単位ごとに更新する。コマンドの標準出力は件数とエラー区分に限定する。確認レポートはローカルで、案件管理サービスの更新や送信の操作は発生しない。

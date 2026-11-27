@@ -259,6 +259,67 @@ function processTestInbox() {
   processInbox_(config, row => attachment_(row, config.LINE_TEST_ACCESS_TOKEN));
 }
 
+const OCR_INBOX_FILE = 'ocr-inbox-test.json';
+const OCR_INBOX_FIELDS = ['受信ID', '経路', '環境', '受信経路詳細', 'LINE送信元種別', 'LINEグループID', '転送受付',
+  '送信者ID', 'イベント種別', 'メッセージ種別', '本文', '受信日時', 'LINE発生日時', '原文ファイルID',
+  '保存状態', '元ファイル名', 'DriveファイルID'];
+
+function buildTestOcrInbox_(rows, config) {
+  const entries = [];
+  for (const row of rows) {
+    if (row[COL['環境']] !== 'test' || row[COL['経路']] !== 'LINE' || row[COL['イベント種別']] !== 'message' ||
+        row[COL['受信経路詳細']] !== '専用グループ転送' || row[COL['LINE送信元種別']] !== 'group' ||
+        row[COL['転送受付']] !== '認可済み' || row[COL['LINEグループID']] !== config.TEST_FORWARD_GROUP_ID ||
+        row[COL['送信者ID']] !== config.TEST_FORWARD_OWNER_ID) continue;
+    const record = Object.fromEntries(OCR_INBOX_FIELDS.map(field => [field, String(row[COL[field]] ?? '')]));
+    const saved = record['保存状態'] === '保存済み';
+    const attachmentPath = saved && record['DriveファイルID'] ?
+      [ATTACHMENTS, receiptMonth_(row), attachmentName_(row)] : null;
+    entries.push({record, attachment_path: attachmentPath});
+  }
+  return {schema: 'line-ocr-test-v1', entries};
+}
+
+function publishTestOcrInbox() {
+  const config = storageSettings_();
+  if (!/^C[0-9a-f]{32}$/.test(config.TEST_FORWARD_GROUP_ID || '') ||
+      !/^U[0-9a-f]{32}$/.test(config.TEST_FORWARD_OWNER_ID || '') || !config.TEST_SHEET_ID) {
+    throw new Error('verified_forward_settings_required');
+  }
+  const root = DriveApp.getFolderById(config.TEST_ROOT_ID);
+  if (root.getName() !== '業務連絡管理（テスト専用）' || root.getSharingAccess() !== DriveApp.Access.PRIVATE) {
+    throw new Error('test_root_must_be_private');
+  }
+  return withLock_(() => {
+    const rows = Sheets.Spreadsheets.Values.get(config.TEST_SHEET_ID, INBOX + '!A1:' + INBOX_LAST_COLUMN,
+      {valueRenderOption: 'UNFORMATTED_VALUE'}).values || [];
+    if (JSON.stringify(rows[0]) !== JSON.stringify(HEADERS)) throw new Error('setup_test_storage_first');
+    const snapshot = buildTestOcrInbox_(rows.slice(1), config);
+    const body = JSON.stringify(snapshot);
+    if (Utilities.newBlob(body).getBytes().length >= 8 * 1024 * 1024) throw new Error('ocr_inbox_size_limit');
+    const files = root.getFilesByName(OCR_INBOX_FILE);
+    if (!files.hasNext()) {
+      root.createFile(OCR_INBOX_FILE, body, MimeType.PLAIN_TEXT);
+    } else {
+      const file = files.next();
+      if (files.hasNext() || file.getSharingAccess() !== DriveApp.Access.PRIVATE) throw new Error('ocr_inbox_not_private');
+      const previous = file.getBlob().getDataAsString();
+      if (JSON.parse(previous).schema !== snapshot.schema) throw new Error('unexpected_ocr_inbox');
+      if (body !== previous) file.setContent(body);
+    }
+    return snapshot.entries.length;
+  });
+}
+
+function enableTestOcrInbox() {
+  publishTestOcrInbox();
+  withLock_(() => {
+    if (!ScriptApp.getProjectTriggers().some(trigger => trigger.getHandlerFunction() === 'publishTestOcrInbox')) {
+      ScriptApp.newTrigger('publishTestOcrInbox').timeBased().everyMinutes(1).create();
+    }
+  });
+}
+
 function processInbox_(config, loadAttachment, allowedIds = null) {
   const stop = Date.now() + 45000;
   while (Date.now() < stop) {
