@@ -1,9 +1,11 @@
 """Store selected evidence and route review-only decisions through a durable queue."""
 
 import argparse
+import hashlib
 import json
 import secrets
 import sqlite3
+import subprocess
 import time
 from pathlib import Path
 
@@ -114,12 +116,34 @@ def normalize_task(task):
     return {**task, 'task_id': identifier, 'schema_version': '1.0'}
 
 
+def screenshot_task(image, executable):
+    """Create a task from an explicitly selected image; OCR stays on this computer."""
+    if not image.is_file() or image.stat().st_size > 25 * 1024 * 1024:
+        raise ValueError('select a local image smaller than 25 MiB')
+    before = hashlib.sha256(image.read_bytes()).hexdigest()
+    output = subprocess.run([str(executable.resolve()), str(image.resolve())], check=True,
+                            capture_output=True, text=True, timeout=40)
+    if before != hashlib.sha256(image.read_bytes()).hexdigest():
+        raise ValueError('image changed during OCR')
+    recognized = json.loads(output.stdout)
+    if not isinstance(recognized, list) or not recognized or not all(isinstance(line, str) for line in recognized):
+        raise ValueError('no usable text in selected image')
+    text = '\n'.join(recognized).strip()
+    if not text:
+        raise ValueError('no usable text in selected image')
+    return {'environment': 'test', 'evidence': [{'id': 'screenshot-' + before, 'channel': 'screenshot',
+            'text': text, 'selected_by_owner': True, 'origin': 'local_ocr'}], 'allowed_actions': []}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('database', type=Path)
     commands = parser.add_subparsers(dest='action', required=True)
     add = commands.add_parser('add')
     add.add_argument('task', type=Path)
+    screenshot = commands.add_parser('add-screenshot')
+    screenshot.add_argument('image', type=Path)
+    screenshot.add_argument('--ocr', type=Path, required=True)
     run = commands.add_parser('run')
     run.add_argument('--owner', default='local-rules')
     retry = commands.add_parser('requeue')
@@ -131,6 +155,8 @@ def main():
         if args.action == 'add':
             task = json.loads(args.task.read_text(encoding='utf-8'))
             result = {'task_id': queue.add(task, timestamp)}
+        elif args.action == 'add-screenshot':
+            result = {'task_id': queue.add(screenshot_task(args.image, args.ocr), timestamp)}
         elif args.action == 'requeue':
             queue.requeue(args.task_id, timestamp)
             result = {'status': 'pending'}

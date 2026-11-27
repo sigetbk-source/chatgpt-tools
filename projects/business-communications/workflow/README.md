@@ -13,4 +13,13 @@ python3 workflow/tasks.py /path/to/test.sqlite3 run
 python3 workflow/tasks.py /path/to/test.sqlite3 requeue TASK_ID
 ```
 
-判断結果をGoogleカレンダーやNotionに反映するには、実サービスの読取アダプターと、承認済みの実行アダプターを追加する。Google People連携、OCR、自動取込、モデルAPI接続、実際の書き込みは未実装。
+macOSで明示選択したスクショは、Visionを使ったローカルOCRから判断キューに投入できる。画像は外部に送らず、原文との照合用に画像ハッシュを保持する。認識結果に記載された年月日は判断案に含められる。日程の書き込み権限は付与しない。
+
+```sh
+swiftc workflow/screenshot_ocr.swift -o /tmp/business-screenshot-ocr
+python3 workflow/tasks.py /path/to/test.sqlite3 add-screenshot /path/to/screenshot.png --ocr /tmp/business-screenshot-ocr
+```
+
+判断結果をGoogleカレンダーやNotionに反映するには、実サービスの読取アダプターと、承認済みの実行アダプターを追加する。Google People連携、自動取込、モデルAPI接続、実際の書き込みは未実装。
+
+OCR実行ファイルのビルドと、模擬認識結果から判断タスクを作るテストは確認済み。画像からの文字認識は、この検証環境でVisionがエラーを返したため未確認。

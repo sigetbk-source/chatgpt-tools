@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 
-DATE = re.compile(r'(?<![\d/])\d{4}-\d{2}-\d{2}(?![\d/])')
+DATE = re.compile(r'(?<![\d/])(?:(\d{4})([-/])(\d{1,2})\2(\d{1,2})|(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日)(?![\d/])')
 CLASSES = {'new_request', 'continuation', 'tentative', 'schedule_confirmed', 'schedule_change',
            'cancellation', 'material_received', 'revision', 'order_or_invoice', 'information',
            'irrelevant', 'unknown'}
@@ -43,7 +43,8 @@ def sources(task):
 def dates(text):
     for match in DATE.finditer(text):
         try:
-            yield dt.date.fromisoformat(match.group()).isoformat()
+            year, _, month, day, jp_year, jp_month, jp_day = match.groups()
+            yield dt.date(int(year or jp_year), int(month or jp_month), int(day or jp_day)).isoformat()
         except ValueError:
             continue
 

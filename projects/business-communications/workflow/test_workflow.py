@@ -1,11 +1,13 @@
 import copy
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from contacts import resolve_destination
 from decide import decide, dry_run
-from tasks import TaskQueue
+from tasks import TaskQueue, screenshot_task
 
 
 class WorkflowTest(unittest.TestCase):
@@ -38,7 +40,8 @@ class WorkflowTest(unittest.TestCase):
         self.assertIsNone(decide(self.task)['project']['selected_id'])
         self.task['evidence'][0]['text'] = '日程変更 2026-02-30'
         self.assertIn('date_unconfirmed', decide(self.task)['uncertainties'])
-        self.task['evidence'][0]['text'] = '日程変更 2026-12-08'
+        self.task['evidence'][0]['text'] = '日程変更 2026年12月8日'
+        self.assertEqual(decide(self.task)['facts'][0]['value'], '2026-12-08')
         self.task['calendar'][0]['all_day'] = False
         self.assertFalse(decide(self.task)['proposed_actions'])
 
@@ -112,6 +115,23 @@ class WorkflowTest(unittest.TestCase):
         self.task['evidence'][0]['selected_by_owner'] = True
         self.assertEqual(queue.add(self.task, 101), self.task['task_id'])
         queue.db.close()
+
+    def test_selected_screenshot_becomes_review_only_evidence(self):
+        with tempfile.TemporaryDirectory() as path:
+            image = Path(path) / 'selected.png'
+            image.write_bytes(b'image-contents')
+            tool = Path(path) / 'ocr'
+            process = subprocess.CompletedProcess([], 0, '["日程変更","2026年12月8日"]', '')
+            with patch('tasks.subprocess.run', return_value=process) as run:
+                task = screenshot_task(image, tool)
+                self.assertEqual(run.call_args.args[0], [str(tool.resolve()), str(image.resolve())])
+            queue = TaskQueue(':memory:')
+            queue.add(task, 100)
+            claim = queue.claim('ocr-review', 101)
+            decision = decide(claim['task'])
+            self.assertEqual(decision['facts'][0]['value'], '2026-12-08')
+            self.assertEqual(decision['proposed_actions'], [])
+            queue.db.close()
 
 
 if __name__ == '__main__':
