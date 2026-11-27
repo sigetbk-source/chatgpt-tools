@@ -56,6 +56,30 @@ class OcrInboxTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'invalid attachment path'):
                 process(root, working / 'reviews', tool, at(130))
 
+    def test_first_start_catches_up_saved_images_from_multiple_days(self):
+        with tempfile.TemporaryDirectory() as folder:
+            working = Path(folder)
+            root = working / TEST_ROOT
+            root.mkdir()
+            tool = working / 'ocr'
+            tool.write_bytes(b'test executable')
+            saved = []
+            for name, second in [('early', 1), ('late', 172801)]:
+                row = receipt(name, second, メッセージ種別='image', DriveファイルID=name + '-file')
+                parts = ['受信ファイル', '2026-11', name + '_image']
+                path = root.joinpath(*parts)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(name.encode())
+                saved.append({'record': row, 'attachment_path': parts})
+            (root / SNAPSHOT).write_text(json.dumps({'schema': SCHEMA, 'entries': saved}), encoding='utf-8')
+            out = working / 'reviews'
+            with patch('ocr_inbox.recognize_screenshot', return_value=[
+                    {'text': '過去の画像', 'x': .2, 'y': .4, 'width': .1, 'height': .03}]) as recognize:
+                for now in [at(173000), at(173100)]:
+                    status = process(root, out, tool, now)
+                    self.assertEqual(status, {'review_reports': 2, 'waiting_for_drive': 0, 'ocr_unavailable': 0})
+                self.assertEqual(recognize.call_count, 2)
+
 
 if __name__ == '__main__':
     unittest.main()

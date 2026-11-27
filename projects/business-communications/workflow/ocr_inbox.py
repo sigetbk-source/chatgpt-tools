@@ -140,8 +140,12 @@ def main():
     os.umask(0o077)
     last_status = None
     while True:
+        now = dt.datetime.now(dt.timezone.utc)
         try:
-            status = process(args.drive_folder, args.report_folder, args.ocr, dt.datetime.now(dt.timezone.utc))
+            status = process(args.drive_folder, args.report_folder, args.ocr, now)
+            if args.watch:
+                save_report(args.report_folder.resolve(), 'watch-status.json',
+                            {'pid': os.getpid(), 'checked_at': now.isoformat(), **status})
         except (ValueError, OSError, KeyError, TypeError, sqlite3.Error):
             status = {'error': 'test_ocr_inbox_unavailable'}
         if status != last_status:
