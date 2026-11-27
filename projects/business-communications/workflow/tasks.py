@@ -1,6 +1,7 @@
 """Store selected evidence and route review-only decisions through a durable queue."""
 
 import argparse
+import csv
 import hashlib
 import json
 import secrets
@@ -10,6 +11,13 @@ import time
 from pathlib import Path
 
 from decide import decide, dry_run, sources, stable_id
+
+
+LINE_RECEIPT_FIELDS = {
+    '受信ID', '経路', '環境', 'イベント種別', 'メッセージ種別', '本文',
+    '保存状態', '原文ファイルID', 'DriveファイルID', '元ファイル名',
+}
+LINE_ATTACHMENT_TYPES = {'image', 'video', 'audio', 'file'}
 
 
 class TaskQueue:
@@ -101,6 +109,18 @@ class TaskQueue:
         if updated.rowcount != 1:
             raise ValueError('task is not awaiting review')
 
+    def show(self, identifier):
+        row = self.db.execute("""
+            SELECT tasks.state, decisions.decision, decisions.preview
+            FROM tasks LEFT JOIN decisions USING(task_id) WHERE tasks.task_id=?
+            ORDER BY decisions.created DESC, decisions.rowid DESC LIMIT 1
+        """, (identifier,)).fetchone()
+        if row is None:
+            raise ValueError('task not found')
+        return {'task_id': identifier, 'state': row['state'],
+                'decision': json.loads(row['decision']) if row['decision'] else None,
+                'preview': json.loads(row['preview']) if row['preview'] else None}
+
 
 def normalize_task(task):
     if task.get('environment') != 'test':
@@ -135,6 +155,40 @@ def screenshot_task(image, executable):
             'text': text, 'selected_by_owner': True, 'origin': 'local_ocr'}], 'allowed_actions': []}
 
 
+def line_receipt_task(ledger, receipt_id):
+    """Read one saved test LINE message from the receipt tab's CSV export."""
+    with ledger.open(encoding='utf-8-sig', newline='') as stream:
+        reader = csv.DictReader(stream, strict=True)
+        fields = reader.fieldnames or []
+        if not LINE_RECEIPT_FIELDS.issubset(fields) or len(fields) != len(set(fields)):
+            raise ValueError('invalid receipt ledger columns')
+        receipt = None
+        for row in reader:
+            if not receipt_id or row['受信ID'] != receipt_id:
+                continue
+            if receipt is not None:
+                raise ValueError('duplicate receipt ID')
+            if None in row or any(row[field] is None for field in LINE_RECEIPT_FIELDS):
+                raise ValueError('incomplete receipt row')
+            receipt = row
+    if receipt is None:
+        raise ValueError('receipt not found')
+    if (receipt['経路'] != 'LINE' or receipt['環境'] != 'test' or
+            receipt['イベント種別'] != 'message' or receipt['保存状態'] != '保存済み' or
+            not receipt['原文ファイルID']):
+        raise ValueError('receipt must be a saved test LINE message with an archive reference')
+
+    kind = receipt['メッセージ種別']
+    evidence = {'id': receipt_id, 'channel': 'line', 'text': receipt['本文'],
+                'archive_file_id': receipt['原文ファイルID']}
+    if kind in LINE_ATTACHMENT_TYPES and receipt['DriveファイルID']:
+        evidence['attachments'] = [{'id': receipt['DriveファイルID'], 'message_type': kind,
+                                    'original_name': receipt['元ファイル名']}]
+    elif kind != 'text' or not receipt['本文'].strip():
+        raise ValueError('receipt has no usable text or saved attachment')
+    return {'environment': 'test', 'evidence': [evidence], 'allowed_actions': []}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('database', type=Path)
@@ -144,8 +198,13 @@ def main():
     screenshot = commands.add_parser('add-screenshot')
     screenshot.add_argument('image', type=Path)
     screenshot.add_argument('--ocr', type=Path, required=True)
+    line = commands.add_parser('add-line')
+    line.add_argument('ledger', type=Path)
+    line.add_argument('receipt_id')
     run = commands.add_parser('run')
     run.add_argument('--owner', default='local-rules')
+    show = commands.add_parser('show')
+    show.add_argument('task_id')
     retry = commands.add_parser('requeue')
     retry.add_argument('task_id')
     args = parser.parse_args()
@@ -157,6 +216,10 @@ def main():
             result = {'task_id': queue.add(task, timestamp)}
         elif args.action == 'add-screenshot':
             result = {'task_id': queue.add(screenshot_task(args.image, args.ocr), timestamp)}
+        elif args.action == 'add-line':
+            result = {'task_id': queue.add(line_receipt_task(args.ledger, args.receipt_id), timestamp)}
+        elif args.action == 'show':
+            result = queue.show(args.task_id)
         elif args.action == 'requeue':
             queue.requeue(args.task_id, timestamp)
             result = {'status': 'pending'}

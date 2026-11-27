@@ -1,4 +1,5 @@
 import copy
+import csv
 import subprocess
 import tempfile
 import unittest
@@ -7,7 +8,7 @@ from unittest.mock import patch
 
 from contacts import resolve_destination
 from decide import decide, dry_run
-from tasks import TaskQueue, screenshot_task
+from tasks import TaskQueue, line_receipt_task, screenshot_task
 
 
 class WorkflowTest(unittest.TestCase):
@@ -132,6 +133,58 @@ class WorkflowTest(unittest.TestCase):
             self.assertEqual(decision['facts'][0]['value'], '2026-12-08')
             self.assertEqual(decision['proposed_actions'], [])
             queue.db.close()
+
+    def test_saved_line_receipt_enters_queue_without_write_permissions(self):
+        receipt = {'受信ID': 'line-1', '経路': 'LINE', '環境': 'test', 'イベント種別': 'message',
+                   'メッセージ種別': 'text', '本文': '日程変更\n2026年12月8日', '保存状態': '保存済み',
+                   '原文ファイルID': 'archive-1', 'DriveファイルID': '', '元ファイル名': ''}
+        with tempfile.TemporaryDirectory() as path:
+            ledger = Path(path) / 'ledger.csv'
+
+            def export(*rows):
+                with ledger.open('w', encoding='utf-8-sig', newline='') as stream:
+                    writer = csv.DictWriter(stream, fieldnames=list(receipt))
+                    writer.writeheader()
+                    writer.writerows(rows)
+
+            export(receipt)
+            queue = TaskQueue(':memory:')
+            try:
+                task = line_receipt_task(ledger, 'line-1')
+                identifier = queue.add(task, 100)
+                self.assertEqual(queue.add(task, 101), identifier)
+                self.assertIsNone(queue.show(identifier)['decision'])
+                job = queue.claim('rules', 102)
+                self.assertEqual(job['task']['evidence'][0]['archive_file_id'], 'archive-1')
+                decision = decide(job['task'])
+                self.assertEqual(decision['classification'], 'schedule_change')
+                self.assertEqual(decision['facts'][0]['value'], '2026-12-08')
+                preview = queue.submit('rules', job['lease'], decision, 103)
+                report = queue.show(identifier)
+                self.assertEqual(report['state'], 'review')
+                self.assertEqual(report['decision'], decision)
+                self.assertEqual(report['preview'], preview)
+                self.assertEqual(preview['operations'], [])
+            finally:
+                queue.db.close()
+
+            image = {**receipt, 'メッセージ種別': 'image', '本文': '', 'DriveファイルID': 'file-1'}
+            export(image)
+            task = line_receipt_task(ledger, 'line-1')
+            self.assertEqual(task['evidence'][0]['attachments'][0]['id'], 'file-1')
+            self.assertEqual(task['allowed_actions'], [])
+
+            for changes in ({'環境': 'production'}, {'保存状態': '添付取得待ち'},
+                            {'原文ファイルID': ''}, {'イベント種別': 'unsend'}, {'DriveファイルID': ''}):
+                with self.subTest(changes=changes):
+                    export({**image, **changes})
+                    with self.assertRaises(ValueError):
+                        line_receipt_task(ledger, 'line-1')
+            export(receipt, image)
+            with self.assertRaisesRegex(ValueError, 'duplicate receipt ID'):
+                line_receipt_task(ledger, 'line-1')
+            with self.assertRaisesRegex(ValueError, 'receipt not found'):
+                line_receipt_task(ledger, 'missing')
 
 
 if __name__ == '__main__':

@@ -10,8 +10,21 @@
 python3 -B -m unittest discover -s workflow -v
 python3 workflow/tasks.py /path/to/test.sqlite3 add /path/to/task.json
 python3 workflow/tasks.py /path/to/test.sqlite3 run
+python3 workflow/tasks.py /path/to/test.sqlite3 show TASK_ID
 python3 workflow/tasks.py /path/to/test.sqlite3 requeue TASK_ID
 ```
+
+テスト台帳の「受信履歴」タブをCSVで出力すると、`add-line` で指定した受信IDの1件を判断キューに登録できる。保存済みのテスト用LINEメッセージだけが対象。同じ受信IDの同じ内容は再登録しても1タスクに収まる。原文と添付のDrive IDを証拠として保持する。添付の中身は読み込まないため、ファイルの内容や移動先はこの経路では確定しない。CSVとSQLiteには連絡内容が含まれるため、テスト・検証用の非公開領域に置く。
+
+```sh
+python3 workflow/tasks.py /path/to/test.sqlite3 add-line /path/to/test-inbox.csv RECEIPT_ID
+python3 workflow/tasks.py /path/to/test.sqlite3 run
+python3 workflow/tasks.py /path/to/test.sqlite3 show TASK_ID
+```
+
+`show` で最新の判断案と検証結果を確認する。案件が不明な場合は保留し、この取込経路ではカレンダー、Notion、Drive、送信キューに対する操作を許可しない。
+
+2026-11-27の検証では、テスト用LINEで受信したテキスト1件と画像2件の台帳データを使い、同じ受信IDを再投入しても3件の判断タスクに収まることを確認した。案件は未確定のままレビュー待ちになり、外部操作案は0件だった。改行を含む日程変更の根拠抽出、未保存・本番行・重複IDの拒否は合成データで確認した。
 
 macOSで明示選択したスクショは、Visionを使ったローカルOCRから判断キューに投入できる。画像は外部に送らず、原文との照合用に画像ハッシュを保持する。認識結果に記載された年月日は判断案に含められる。日程の書き込み権限は付与しない。
 
