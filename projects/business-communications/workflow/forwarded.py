@@ -180,7 +180,6 @@ def review_forwards(rows, now, quiet_seconds=120, max_open_seconds=1800, *, layo
         seen_files = {}
         for batch in group_messages(messages, quiet):
             report = describe(batch, now, quiet, max_open)
-            report['screenshot_evidence'] = add_image_evidence(report, layouts)
             for attachment in report['attachments']:
                 fingerprint = fingerprints.get(attachment['file_id'])
                 if fingerprint is not None:
@@ -189,6 +188,7 @@ def review_forwards(rows, now, quiet_seconds=120, max_open_seconds=1800, *, layo
                     prior_file = seen_files.setdefault(preview_key, attachment['receipt_id'])
                     if prior_file != attachment['receipt_id']:
                         attachment['possible_same_file_as'] = prior_file
+            report['screenshot_evidence'] = add_image_evidence(report, layouts)
             content = [row['本文'] for row, _, _ in batch if row['メッセージ種別'] == 'text'
                        and not sender_label(row) and row['本文'].strip() not in END]
             if content:

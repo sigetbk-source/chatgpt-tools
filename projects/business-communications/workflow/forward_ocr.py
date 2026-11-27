@@ -7,6 +7,7 @@ import re
 import subprocess
 import unicodedata
 from collections import Counter
+from decimal import Decimal
 from pathlib import Path
 
 from decide import dates
@@ -18,6 +19,30 @@ RELATIVE_DAYS = {'今日': 0, '昨日': 1, '一昨日': 2, 'おととい': 2}
 PARTIAL_DATE = re.compile(r'\d{1,2}月\s*\d{1,2}日(?:[（(][月火水木金土日](?:曜(?:日)?)?[）)])?')
 FULL_DATE = re.compile(r'(?:\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{4}年\s*\d{1,2}月\s*\d{1,2}日)')
 FILE_NAME = re.compile(r'[^/\\\r\n]+\.(?:docx?|xlsx?|pdf|pptx?|zip|mp4|mov|wav|mp3|jpe?g|png)', re.I)
+FILE_SIZE = re.compile(r'(\d{1,10}(?:\.\d{1,3})?)\s*(B|bytes?|[KMGT]i?B|バイト)', re.I)
+
+
+def display_size_ranges(label):
+    value, unit = label.groups()
+    number = Decimal(value)
+    unit = unit.upper()
+    places = max(0, -number.as_tuple().exponent)
+    if unit in {'B', 'BYTE', 'BYTES', 'バイト'}:
+        return [(number, number)] if number == number.to_integral_value() else []
+    power = 'KMGT'.index(unit[0]) + 1
+    step = Decimal(1).scaleb(-places)
+    bases = (1024,) if 'I' in unit else (1000, 1024)
+    return [(max(0, (number - step) * base ** power), (number + step) * base ** power) for base in bases]
+
+
+def attachment_size_below(line, next_line):
+    if not line['conversation_region_known'] or next_line is None:
+        return None
+    x, y, _, height = line['bounds']
+    nx, ny, _, nh = next_line['bounds']
+    if abs(nx - x) > 0.018 or not -0.006 <= ny - y - height <= max(height, nh):
+        return None
+    return FILE_SIZE.fullmatch(unicodedata.normalize('NFKC', next_line['text']))
 
 
 def normalize_clock(text):
@@ -203,12 +228,24 @@ def add_image_evidence(report, layouts):
                            'method': 'local_image_ocr', 'status': 'unavailable', 'lines': [], 'messages': []})
             continue
         lines = screenshot_lines(layout)
+        for index, line in enumerate(lines):
+            if line['kind'] == 'attachment_name':
+                matches = [a for a in attachments if a['role'] == 'received_file' and a['file_id']
+                           and unicodedata.normalize('NFC', a['name']) == line['text']]
+                size_line = lines[index + 1] if index + 1 < len(lines) else None
+                size = attachment_size_below(line, size_line)
+                line['candidate_receipt_ids'] = [a['receipt_id'] for a in matches]
+                if size:
+                    ranges = display_size_ranges(size)
+                    size_line['kind'] = 'attachment_size'
+                    line['display_size_line_order'] = size_line['order']
+                    line['size_comparisons'] = []
+                    for match in matches:
+                        actual = match.get('local_file_fingerprint', {}).get('bytes')
+                        state = 'unknown' if actual is None or not ranges else (
+                            'consistent' if any(lo <= actual <= hi for lo, hi in ranges) else 'different')
+                        line['size_comparisons'].append({'receipt_id': match['receipt_id'], 'status': state})
         images.append({'receipt_id': image['receipt_id'], 'file_id': image['file_id'],
                        'method': 'local_image_ocr', 'status': 'unconfirmed', 'lines': lines,
                        'messages': conversation_messages(lines)})
-        for line in lines:
-            if line['kind'] == 'attachment_name':
-                matches = [a['receipt_id'] for a in attachments if a['role'] == 'received_file' and a['file_id']
-                           and unicodedata.normalize('NFC', a['name']) == line['text']]
-                line['candidate_receipt_ids'] = matches
     return images

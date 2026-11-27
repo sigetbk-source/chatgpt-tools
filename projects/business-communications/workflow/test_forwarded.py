@@ -114,6 +114,26 @@ class ForwardingTest(unittest.TestCase):
         self.assertEqual(report['attachments'][2]['possible_same_file_as'], 'one')
         self.assertEqual(report['preview']['operations'], [])
 
+    def test_attachment_display_size_distinguishes_local_candidates_without_confirming(self):
+        rows = [receipt('image', 1, メッセージ種別='image', DriveファイルID='image-id'),
+                receipt('one', 2, メッセージ種別='file', DriveファイルID='one-id', 元ファイル名='検証.pdf'),
+                receipt('two', 3, メッセージ種別='file', DriveファイルID='two-id', 元ファイル名='検証.pdf'),
+                receipt('three', 4, メッセージ種別='file', DriveファイルID='three-id', 元ファイル名='検証.pdf')]
+        layout = {'region': [.1, .1, .8, .8], 'lines': [
+            dict(text='検証.pdf', x=.15, y=.4, width=.16, height=.025),
+            dict(text='2.0 KB', x=.15, y=.43, width=.1, height=.02)]}
+        fingerprints = {'one-id': {'sha256': 'one', 'bytes': 2048},
+                        'two-id': {'sha256': 'two', 'bytes': 8024}}
+        report, = review_forwards(rows, at(130), layouts={'image-id': layout}, fingerprints=fingerprints)
+        image, = report['screenshot_evidence']
+        name, size = image['lines']
+        self.assertEqual(name['candidate_receipt_ids'], ['one', 'two', 'three'])
+        self.assertEqual([c['status'] for c in name['size_comparisons']], ['consistent', 'different', 'unknown'])
+        self.assertEqual(size['kind'], 'attachment_size')
+        self.assertEqual([m['text'] for m in image['messages']], ['検証.pdf'])
+        self.assertTrue(all(a['matching_status'] == 'unconfirmed' for a in report['attachments']))
+        self.assertEqual(report['preview']['operations'], [])
+
     def test_line_desktop_layout_ignores_sidebar_and_pairs_only_visible_times(self):
         def line(text, x, y, width):
             return dict(text=text, x=x, y=y, width=width, height=.023)
