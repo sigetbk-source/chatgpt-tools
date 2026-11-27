@@ -12,12 +12,17 @@ struct LineObservation: Encodable {
 do {
     let arguments = Array(CommandLine.arguments.dropFirst())
     let withLayout = arguments.count == 2 && arguments.first == "--layout"
-    guard arguments.count == 1 || withLayout, let path = arguments.last else {
+    guard let path = arguments.last, (arguments.count == 1 || withLayout), path != "--layout" else {
         throw NSError(domain: "ScreenshotOCR", code: 1, userInfo: [
             NSLocalizedDescriptionKey: "Pass a screenshot file path, optionally preceded by --layout."
         ])
     }
     let url = URL(fileURLWithPath: path)
+    guard FileManager.default.isReadableFile(atPath: url.path) else {
+        throw NSError(domain: "ScreenshotOCR", code: 2, userInfo: [
+            NSLocalizedDescriptionKey: "Cannot read the specified screenshot."
+        ])
+    }
     let request = VNRecognizeTextRequest()
     request.recognitionLevel = .accurate
     request.revision = VNRecognizeTextRequestRevision3

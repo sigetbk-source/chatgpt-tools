@@ -10,7 +10,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from decide import decide, dry_run, stable_id
-from forward_ocr import add_image_evidence, file_fingerprints
+from forward_ocr import add_image_evidence, file_fingerprints, recognize_screenshot
 
 
 FIELDS = {
@@ -238,13 +238,22 @@ def main():
     parser.add_argument('--quiet-seconds', type=int, default=120)
     parser.add_argument('--layout-evidence', type=Path, help='JSON of saved image IDs to local OCR observations')
     parser.add_argument('--local-files', type=Path, help='JSON of saved file IDs to selected local copies')
+    parser.add_argument('--ocr', type=Path, help='local OCR executable for selected saved images')
     args = parser.parse_args()
     layouts = json.loads(args.layout_evidence.read_text(encoding='utf-8')) if args.layout_evidence else {}
     paths = json.loads(args.local_files.read_text(encoding='utf-8')) if args.local_files else {}
     if not isinstance(layouts, dict) or not isinstance(paths, dict):
         parser.error('evidence files must contain JSON objects')
-    reports = review_forwards(read_forwards(args.ledger), dt.datetime.now(dt.timezone.utc), args.quiet_seconds,
-                              layouts=layouts, fingerprints=file_fingerprints(paths))
+    if args.ocr and not args.local_files:
+        parser.error('--ocr requires --local-files')
+    rows = read_forwards(args.ledger)
+    now = dt.datetime.now(dt.timezone.utc)
+    if args.ocr:
+        for row, _, _ in message_rows(rows, now):
+            file_id = row['DriveファイルID']
+            if row['メッセージ種別'] == 'image' and row['保存状態'] == '保存済み' and file_id in paths and file_id not in layouts:
+                layouts[file_id] = recognize_screenshot(paths[file_id], args.ocr)
+    reports = review_forwards(rows, now, args.quiet_seconds, layouts=layouts, fingerprints=file_fingerprints(paths))
     record_reviews(args.review_database, reports)
     print(json.dumps(reports, ensure_ascii=False))
 

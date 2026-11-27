@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from forwarded import record_reviews, review_forwards
-from forward_ocr import file_fingerprints
+from forward_ocr import conversation_messages, file_fingerprints, screenshot_lines
 
 
 BASE = dt.datetime(2026, 11, 27, 12, tzinfo=dt.timezone.utc)
@@ -113,6 +113,43 @@ class ForwardingTest(unittest.TestCase):
         self.assertTrue(all(s['original_at'] is None for s in report['statements']))
         self.assertEqual(report['attachments'][2]['possible_same_file_as'], 'one')
         self.assertEqual(report['preview']['operations'], [])
+
+    def test_line_desktop_layout_ignores_sidebar_and_pairs_only_visible_times(self):
+        def line(text, x, y, width):
+            return dict(text=text, x=x, y=y, width=width, height=.023)
+
+        layout = [line('11月27日（金）23:58', .875, .009, .113),
+                  line('トークルームとメッセージ検索', .07, .14, .18),
+                  line('別の会話', .12, .43, .08), line('午後 4:22', .25, .22, .05),
+                  line('メッセージを入力', .33, .854, .09), line('今日', .64, .26, .02),
+                  line('制作日程の確認', .379, .185, .26), line('午後1:37', .655, .199, .045),
+                  line('作業メモです', .79, .317, .172), line('次回に続きます', .79, .342, .113),
+                  line('既読', .70, .548, .022), line('午前 10:08', .677, .570, .050),
+                  line('2件分で処理します', .741, .557, .225),
+                  line('ご連絡ありがとうございます。', .379, .704, .493),
+                  line('午前 11:12', .889, .717, .05)]
+        observations = screenshot_lines(layout)
+        messages = conversation_messages(observations)
+        self.assertEqual(len(messages), 4)
+        self.assertEqual([m['side'] for m in messages], ['left', 'right', 'right', 'left'])
+        self.assertEqual([m['visible_time'] for m in messages], ['13:37', None, '10:08', '11:12'])
+        self.assertEqual(messages[1]['text'], '作業メモです\n次回に続きます')
+        self.assertEqual(messages[1]['date_label'], '今日')
+        self.assertIsNone(messages[1]['visible_date'])
+        self.assertTrue(all(m['speaker_role'] == 'unknown' for m in messages))
+        self.assertNotIn('別の会話', [l['text'] for l in observations])
+        self.assertNotIn('11月27日（金）23:58', [l['text'] for l in observations])
+        dated = conversation_messages(screenshot_lines({'lines': layout, 'captured_at': '2026-11-27T23:58:00+09:00'}))
+        self.assertEqual(dated[1]['visible_date'], '2026-11-27')
+
+    def test_ambiguous_clocks_are_not_assigned(self):
+        lines = [{'text': text, 'x': x, 'y': y, 'width': width, 'height': .025}
+                 for text, x, y, width in [('今日', .5, .21, .03), ('依頼内容', .22, .4, .13),
+                                           ('午前12:03', .37, .401, .04), ('午後12:04', .37, .414, .04)]]
+        ocr = screenshot_lines({'region': [.2, .2, .7, .65], 'lines': lines})
+        self.assertEqual([l['visible_time'] for l in ocr if l['kind'] == 'time_marker'], ['00:03', '12:04'])
+        message, = conversation_messages(ocr)
+        self.assertIsNone(message['visible_time'])
 
 
 if __name__ == '__main__':
