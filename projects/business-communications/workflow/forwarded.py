@@ -10,6 +10,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from decide import decide, dry_run, stable_id
+from forward_ocr import add_image_evidence, file_fingerprints
 
 
 FIELDS = {
@@ -162,11 +163,13 @@ def describe(batch, now, quiet, max_open):
             'decision': decision, 'preview': preview}
 
 
-def review_forwards(rows, now, quiet_seconds=120, max_open_seconds=1800):
+def review_forwards(rows, now, quiet_seconds=120, max_open_seconds=1800, *, layouts=None, fingerprints=None):
     if now.utcoffset() is None or not 0 < quiet_seconds < max_open_seconds:
         raise ValueError('invalid forwarding time settings')
     quiet = dt.timedelta(seconds=quiet_seconds)
     max_open = dt.timedelta(seconds=max_open_seconds)
+    layouts = layouts or {}
+    fingerprints = fingerprints or {}
     by_pair = defaultdict(list)
     for item in message_rows(rows, now):
         row = item[0]
@@ -174,8 +177,18 @@ def review_forwards(rows, now, quiet_seconds=120, max_open_seconds=1800):
     reports = []
     for messages in by_pair.values():
         seen_content = {}
+        seen_files = {}
         for batch in group_messages(messages, quiet):
             report = describe(batch, now, quiet, max_open)
+            report['screenshot_evidence'] = add_image_evidence(report, layouts)
+            for attachment in report['attachments']:
+                fingerprint = fingerprints.get(attachment['file_id'])
+                if fingerprint is not None:
+                    attachment['local_file_fingerprint'] = fingerprint
+                    preview_key = fingerprint['sha256']
+                    prior_file = seen_files.setdefault(preview_key, attachment['receipt_id'])
+                    if prior_file != attachment['receipt_id']:
+                        attachment['possible_same_file_as'] = prior_file
             content = [row['本文'] for row, _, _ in batch if row['メッセージ種別'] == 'text'
                        and not sender_label(row) and row['本文'].strip() not in END]
             if content:
@@ -223,8 +236,15 @@ def main():
     parser.add_argument('ledger', type=Path)
     parser.add_argument('review_database', type=Path)
     parser.add_argument('--quiet-seconds', type=int, default=120)
+    parser.add_argument('--layout-evidence', type=Path, help='JSON of saved image IDs to local OCR observations')
+    parser.add_argument('--local-files', type=Path, help='JSON of saved file IDs to selected local copies')
     args = parser.parse_args()
-    reports = review_forwards(read_forwards(args.ledger), dt.datetime.now(dt.timezone.utc), args.quiet_seconds)
+    layouts = json.loads(args.layout_evidence.read_text(encoding='utf-8')) if args.layout_evidence else {}
+    paths = json.loads(args.local_files.read_text(encoding='utf-8')) if args.local_files else {}
+    if not isinstance(layouts, dict) or not isinstance(paths, dict):
+        parser.error('evidence files must contain JSON objects')
+    reports = review_forwards(read_forwards(args.ledger), dt.datetime.now(dt.timezone.utc), args.quiet_seconds,
+                              layouts=layouts, fingerprints=file_fingerprints(paths))
     record_reviews(args.review_database, reports)
     print(json.dumps(reports, ensure_ascii=False))
 

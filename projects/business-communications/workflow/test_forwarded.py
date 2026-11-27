@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from forwarded import record_reviews, review_forwards
+from forward_ocr import file_fingerprints
 
 
 BASE = dt.datetime(2026, 11, 27, 12, tzinfo=dt.timezone.utc)
@@ -89,6 +90,29 @@ class ForwardingTest(unittest.TestCase):
             with sqlite3.connect(path) as db:
                 self.assertEqual(db.execute('SELECT COUNT(*) FROM forward_reviews').fetchone()[0], 2)
                 self.assertEqual(db.execute('SELECT unit_id FROM forward_sources').fetchone()[0], first['unit_id'])
+
+    def test_ocr_layout_and_same_named_files_are_only_candidates(self):
+        rows = [receipt('image', 1, メッセージ種別='image', DriveファイルID='image-id'),
+                receipt('one', 2, メッセージ種別='file', DriveファイルID='one-id', 元ファイル名='台本.pdf'),
+                receipt('two', 3, メッセージ種別='file', DriveファイルID='two-id', 元ファイル名='台本.pdf')]
+        positions = [dict(text='14:30', x=0.81, y=0.5, width=0.1, height=0.05),
+                     dict(text='11月27日', x=0.4, y=0.2, width=0.2, height=0.05),
+                     dict(text='台本.pdf', x=0.15, y=0.4, width=0.2, height=0.05)]
+        with tempfile.TemporaryDirectory() as folder:
+            copy = Path(folder) / 'copy.pdf'
+            copy.write_bytes(b'same file fixture')
+            fingerprints = file_fingerprints({'one-id': copy, 'two-id': copy})
+        report, = review_forwards(rows, at(124), layouts={'image-id': positions}, fingerprints=fingerprints)
+        image, = report['screenshot_evidence']
+        day, file, time = image['lines']
+        self.assertIsNone(day['visible_date'])
+        self.assertEqual(day['time_precision'], 'month_and_day')
+        self.assertEqual(file['candidate_receipt_ids'], ['one', 'two'])
+        self.assertEqual(time['side'], 'right')
+        self.assertEqual(time['speaker_role'], 'unknown')
+        self.assertTrue(all(s['original_at'] is None for s in report['statements']))
+        self.assertEqual(report['attachments'][2]['possible_same_file_as'], 'one')
+        self.assertEqual(report['preview']['operations'], [])
 
 
 if __name__ == '__main__':
