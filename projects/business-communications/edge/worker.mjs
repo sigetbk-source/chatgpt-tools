@@ -45,11 +45,12 @@ const empty = status => new Response(null, {status});
 
 export async function handle(request, env, forward = fetch) {
   const url = new URL(request.url);
-  if (request.method === 'GET' && url.pathname === '/healthz') return empty(200);
+  const configured = env.LINE_TEST_CHANNEL_SECRET && env.LINE_TEST_BOT_ID &&
+    env.GAS_WORKER_SECRET && env.GAS_WORKER_SECRET.length >= 32 &&
+    /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(env.GAS_WORKER_URL || '');
+  if (request.method === 'GET' && url.pathname === '/healthz' && !url.search) return empty(configured ? 200 : 503);
   if (request.method !== 'POST' || url.pathname !== '/line/webhook' || url.search) return empty(404);
-  if (!env.LINE_TEST_CHANNEL_SECRET || !env.LINE_TEST_BOT_ID ||
-      !env.GAS_WORKER_SECRET || env.GAS_WORKER_SECRET.length < 32 || !env.GAS_WORKER_URL ||
-      !/^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(env.GAS_WORKER_URL)) return empty(503);
+  if (!configured) return empty(503);
   const supplied = request.headers.get('x-line-signature') || '';
   if (!/^[A-Za-z0-9+/]{43}=$/.test(supplied)) return empty(401);
   if (Number(request.headers.get('content-length')) > maxBytes) return empty(413);

@@ -4,6 +4,7 @@ import argparse
 import csv
 import hashlib
 import json
+import re
 import secrets
 import sqlite3
 import subprocess
@@ -177,6 +178,10 @@ def line_receipt_task(ledger, receipt_id):
             receipt['イベント種別'] != 'message' or receipt['保存状態'] != '保存済み' or
             not receipt['原文ファイルID']):
         raise ValueError('receipt must be a saved test LINE message with an archive reference')
+    route = receipt.get('受信経路詳細')
+    conversation = receipt.get('会話ID') or ''
+    if route == '専用グループ転送' or (not route and re.fullmatch(r'C[0-9a-f]{32}', conversation)):
+        raise ValueError('group forwarding requires separate review')
 
     kind = receipt['メッセージ種別']
     evidence = {'id': receipt_id, 'channel': 'line', 'text': receipt['本文'],

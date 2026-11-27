@@ -13,6 +13,10 @@ Pythonクライアントは `LINE_SEND_TEST_URL`、`LINE_SEND_CLIENT_ID`、`LINE
 
 送信前にBot ID・現在の使用量・月間上限を照合する。試験用上限 `TEST_MONTHLY_LIMIT` の既定値は20通。結果不明は保留する。APIが一時失敗を返した場合のみ、同じLINEリトライキーで最大3回試行する。自動のプラン変更は行わない。Driveリンクはテストフォルダ直下の対象で、本人のアクセスを確認できるファイルに限る。
 
+送信予定人数を加算してから残枠を判定する。月間利用量または上限の応答が不正・取得不能な場合は送信せず「条件待ち」。残枠不足は「上限保留」。`TEST_QUOTA_WARNING_PERCENT`（既定80）に到達する場合は順次、送信履歴に `quotaWarning` を記録する。外部通知先は未接続。
+
+本番計画は日本向けコミュニケーションプランの月200通を初期想定とし、納品60通・本人通知30通・その他30通で120通、残80通と仮置きする。実プランと宛先人数別の見込みを本番移行前に確認する。 [LINE公式アカウントの料金プラン](https://www.lycbiz.com/jp/service/line-official-account/plan/)
+
 現段階の対応は本人宛てテキストとDriveファイルURLのPush。テンプレート・宛先は呼び出し元が決める。定期起動、返信トークンによる返信、直接メディア送信、本番移行、料金上限通知は未検証または未実装。
 
 ## 検証
@@ -20,11 +24,6 @@ Pythonクライアントは `LINE_SEND_TEST_URL`、`LINE_SEND_CLIENT_ID`、`LINE
 ```sh
 /System/Library/Frameworks/JavaScriptCore.framework/Versions/A/Helpers/jsc sender/Code.gs sender/test_sender.js
 ```
-
-### 本人宛てテキストの実機試験（2026-11-27）
-
-- テスト専用Apps Scriptで1件を送信キューに登録し、本人の許可を受けて承認・送信した。LINE Messaging APIは初回のリクエストにHTTP 200を返し、台帳に「API受付成功」と試行回数1を記録した。
-- 受信者本人がLINEアプリでテストメッセージの着信を確認した。試験後に `ENABLE_TEST_PUSH` を解除した。署名付きPOSTによる外部クライアント接続、Driveリンクの実送信、定期起動は実機未検証。
 
 - [LINE Messaging APIリファレンス](https://developers.line.biz/en/reference/messaging-api/)
 - [LINEのAPI再試行](https://developers.line.biz/en/docs/messaging-api/retrying-api-request/)

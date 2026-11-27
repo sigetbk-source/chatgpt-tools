@@ -1,0 +1,95 @@
+import datetime as dt
+import sqlite3
+import tempfile
+import unittest
+from pathlib import Path
+
+from forwarded import record_reviews, review_forwards
+
+
+BASE = dt.datetime(2026, 11, 27, 12, tzinfo=dt.timezone.utc)
+
+
+def at(second):
+    return BASE + dt.timedelta(seconds=second)
+
+
+def receipt(identifier, second, text='', **overrides):
+    return {'受信ID': identifier, '経路': 'LINE', '環境': 'test', '受信経路詳細': '専用グループ転送',
+            'LINE送信元種別': 'group', 'LINEグループID': 'C' + 'a' * 32, '転送受付': '認可済み',
+            '送信者ID': 'U' + 'b' * 32, 'イベント種別': 'message', 'メッセージ種別': 'text', '本文': text,
+            '受信日時': at(second).isoformat(), 'LINE発生日時': at(second).isoformat(),
+            '原文ファイルID': 'archive-' + identifier, '保存状態': '保存済み', '元ファイル名': '',
+            'DriveファイルID': '', **overrides}
+
+
+class ForwardingTest(unittest.TestCase):
+    def test_front_and_back_declarations_without_end(self):
+        for rows in ([receipt('a', 0, '佐藤さんから'), receipt('b', 4, '日程変更をお願いします')],
+                     [receipt('b', 0, '日程変更をお願いします'), receipt('a', 4, '転送元：佐藤さん')]):
+            pending, = review_forwards(rows, at(123))
+            settled, = review_forwards(rows, at(124))
+            self.assertEqual(pending['state'], 'collecting')
+            self.assertEqual(settled['state'], 'review')
+            statement, = settled['statements']
+            self.assertEqual(statement['original_sender'], '佐藤さん')
+            self.assertEqual(statement['sender_evidence_ids'], ['a'])
+            self.assertIsNone(statement['original_at'])
+            self.assertIsNone(statement['original_contact_id'])
+            self.assertEqual(settled['preview']['operations'], [])
+
+    def test_boundary_candidates_and_unrelated_group_members(self):
+        rows = [receipt('a', 0, '佐藤さんから'), receipt('b', 2, '仮押さえ'),
+                receipt('other', 3, '転送終了', 転送受付='未認可'),
+                receipt('general', 4, '転送元：田中さん', 受信経路詳細='一般グループ'),
+                receipt('c', 5, '鈴木さんから'), receipt('d', 6, '「以上です」という引用'),
+                receipt('e', 7, '続報'), receipt('f', 8, '転送終了')]
+        first, second = review_forwards(rows + [rows[0]], at(128))
+        self.assertEqual(first['source_ids'], ['a', 'b'])
+        self.assertEqual(second['source_ids'], ['c', 'd', 'e', 'f'])
+        self.assertEqual([s['receipt_id'] for s in second['statements']], ['d', 'e'])
+        self.assertTrue(all(s['original_sender'] is None for s in second['statements']))
+        with self.assertRaises(ValueError):
+            review_forwards(rows + [receipt('b', 3, 'conflict')], at(128))
+
+    def test_attachment_wait_failure_and_image_role(self):
+        image = receipt('image', 4, メッセージ種別='image', DriveファイルID='image-id')
+        first = receipt('one', 6, メッセージ種別='file', DriveファイルID='one-id', 元ファイル名='台本.pdf')
+        pending = receipt('two', 8, メッセージ種別='file', 保存状態='添付取得待ち', 元ファイル名='台本.pdf')
+        end = receipt('end', 10, '以上です')
+        waiting, = review_forwards([image, first, pending, end], at(130))
+        self.assertEqual(waiting['state'], 'collecting')
+        stale, = review_forwards([image, first, pending, end], at(1805))
+        self.assertIn('long_open_unit', stale['uncertainties'])
+        failed, = review_forwards([image, first, {**pending, '保存状態': '保存失敗'}, end], at(130))
+        self.assertEqual(failed['state'], 'review')
+        self.assertIsNone(failed['decision'])
+        self.assertIsNone(failed['preview'])
+        saved, = review_forwards([image, first, {**pending, '保存状態': '保存済み', 'DriveファイルID': 'two-id'}, end], at(130))
+        self.assertEqual([a['file_id'] for a in saved['attachments']], ['image-id', 'one-id', 'two-id'])
+        self.assertEqual(saved['attachments'][0]['role'], 'unconfirmed')
+        image_only, = review_forwards([image], at(130))
+        self.assertEqual(image_only['decision']['classification'], 'unknown')
+
+    def test_retransmission_and_late_correction_do_not_replace_record(self):
+        text = receipt('first', 0, '仮押さえ')
+        again = receipt('again', 150, '仮押さえ')
+        first, repeated = review_forwards([text, again], at(280))
+        self.assertEqual(repeated['possible_retransmission_of'], first['unit_id'])
+        self.assertNotEqual(repeated['unit_id'], first['unit_id'])
+        late = receipt('late', 151, '鈴木さんから', LINE発生日時=at(2).isoformat())
+        corrected, = review_forwards([text, late], at(300))
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'reviews.db'
+            record_reviews(path, [first])
+            record_reviews(path, [corrected])
+            record_reviews(path, [corrected])
+            self.assertEqual(corrected['correction_candidates_for'], [first['unit_id']])
+            self.assertIsNone(corrected['preview'])
+            with sqlite3.connect(path) as db:
+                self.assertEqual(db.execute('SELECT COUNT(*) FROM forward_reviews').fetchone()[0], 2)
+                self.assertEqual(db.execute('SELECT unit_id FROM forward_sources').fetchone()[0], first['unit_id'])
+
+
+if __name__ == '__main__':
+    unittest.main()

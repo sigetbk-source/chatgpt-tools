@@ -21,6 +21,10 @@ const store = async (url, options) => {
   return Response.json({ok: true});
 };
 
+const health = new Request('https://test.example/healthz');
+assert.equal((await handle(health, env, store)).status, 200);
+assert.equal((await handle(health, {...env, GAS_WORKER_SECRET: ''}, store)).status, 503);
+
 assert.equal((await handle(makeRequest(raw, signature('wrong', raw)), env, store)).status, 401);
 assert.equal((await handle(makeRequest(raw.replace('fake-bot', 'other')), env, store)).status, 403);
 assert.equal((await handle(makeRequest('{'), env, store)).status, 400);

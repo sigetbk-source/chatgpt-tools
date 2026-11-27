@@ -1,12 +1,16 @@
 const INBOX = '受信履歴';
 const ARCHIVE = '原文ログ';
 const ATTACHMENTS = '受信ファイル';
-const HEADERS = [
+const LEGACY_HEADERS = [
   '受信ID', '経路', '環境', '受信日時', '記録日時', '送信者ID', '表示名', '会話ID',
   'イベントID', 'メッセージID', 'メッセージ種別', '本文', '元ファイル名', 'DriveファイルID',
   'URL', '保存状態', '振り分け状態', '案件ID', '移動先ID', 'エラー', '試行回数',
   '原文ファイルID', '原文保存待ち', '次回試行時刻', 'イベント種別', 'LINE発生日時', '処理リース',
 ];
+const HEADERS = [...LEGACY_HEADERS, '受信経路詳細', 'LINE送信元種別', 'LINEグループID', '転送受付'];
+const INBOX_LAST_COLUMN = 'AE';
+const HEALTH_FOLDER = '死活監視（テスト専用）';
+const HEALTH_MARKER = 'synthetic-receiver-check.txt';
 const COL = Object.fromEntries(HEADERS.map((name, index) => [name, index]));
 const ATTACHMENT_TYPES = ['image', 'video', 'audio', 'file'];
 const MAX_ATTEMPTS = 6;
@@ -41,20 +45,69 @@ function configureTestBotIdentity() {
 function doPost(e) {
   try {
     const config = storageSettings_();
-    if (!config.TEST_BOT_ID || !config.WORKER_SECRET || config.WORKER_SECRET.length < 32) return postResult_(false);
     const body = e && e.postData && e.postData.contents;
     if (!body || body.length > 710000) return postResult_(false);
     const envelope = JSON.parse(body);
+    if (envelope && envelope.kind === 'receiver_health') return receiverHealth_(config, envelope);
+    if (!config.TEST_BOT_ID || !config.WORKER_SECRET || config.WORKER_SECRET.length < 32) return postResult_(false);
     if (!validEnvelope_(envelope, config.WORKER_SECRET, Date.now())) return postResult_(false);
     const raw = Utilities.newBlob(Utilities.base64Decode(envelope.payload)).getDataAsString('UTF-8');
     const payload = JSON.parse(raw);
     if (payload.destination !== config.TEST_BOT_ID || !Array.isArray(payload.events)) return postResult_(false);
-    const rows = payload.events.map(event => eventRow_(event, new Date()));
+    const rows = payload.events.map(event => eventRow_(event, new Date(), config));
     if (rows.length) withLock_(() => appendEvents_(config.TEST_SHEET_ID, rows));
     return postResult_(true);
   } catch (_) {
     return postResult_(false);
   }
+}
+
+function receiverHealth_(config, envelope) {
+  const now = Date.now();
+  const secret = config.RECEIVER_HEALTH_SECRET || '';
+  if (secret.length < 32 || secret === config.WORKER_SECRET ||
+      typeof envelope.payload !== 'string' || envelope.payload.length > 256 ||
+      !validEnvelope_(envelope, secret, now)) return postResult_(false);
+  const payload = JSON.parse(Utilities.newBlob(Utilities.base64Decode(envelope.payload)).getDataAsString('UTF-8'));
+  if (payload.kind !== 'receiver_health' || !/^[a-f0-9]{32}$/.test(payload.nonce || '') ||
+      !config.TEST_SHEET_ID || !config.ARCHIVE_ID || !config.ATTACHMENTS_ID) return postResult_(false);
+
+  return withLock_(() => {
+    const root = DriveApp.getFolderById(config.TEST_ROOT_ID);
+    if (root.getName() !== '業務連絡管理（テスト専用）' || root.getSharingAccess() !== DriveApp.Access.PRIVATE) {
+      return postResult_(false);
+    }
+    const dates = Sheets.Spreadsheets.Values.get(config.TEST_SHEET_ID, INBOX + '!D2:D',
+      {valueRenderOption: 'UNFORMATTED_VALUE'}).values || [];
+    const states = Sheets.Spreadsheets.Values.get(config.TEST_SHEET_ID, INBOX + '!P2:P').values || [];
+    let pending = 0;
+    let oldestPendingSeconds = 0;
+    const pendingStates = ['受信済み', '添付取得待ち', '再試行待ち'];
+    for (let i = 0; i < states.length; i++) {
+      if (!pendingStates.includes(states[i][0])) continue;
+      const received = Date.parse(dates[i]?.[0] || '');
+      if (!Number.isFinite(received)) return postResult_(false);
+      pending++;
+      oldestPendingSeconds = Math.max(oldestPendingSeconds, Math.floor((now - received) / 1000));
+    }
+
+    const markerFolder = folder_(root, HEALTH_FOLDER);
+    const lookup = markerFolder.getFilesByName(HEALTH_MARKER);
+    const content = 'receiver-health-v1:' + payload.nonce;
+    let marker;
+    if (lookup.hasNext()) {
+      marker = lookup.next();
+      if (lookup.hasNext() || !/^receiver-health-v1:[a-f0-9]{32}$/.test(marker.getBlob().getDataAsString())) {
+        return postResult_(false);
+      }
+      marker.setContent(content);
+    } else {
+      marker = markerFolder.createFile(HEALTH_MARKER, content, MimeType.PLAIN_TEXT);
+    }
+    if (marker.getBlob().getDataAsString() !== content) return postResult_(false);
+    return ContentService.createTextOutput(JSON.stringify({ok: true, nonce: payload.nonce, pending, oldestPendingSeconds}))
+      .setMimeType(ContentService.MimeType.JSON);
+  });
 }
 
 function validEnvelope_(envelope, key, now) {
@@ -68,7 +121,7 @@ function validEnvelope_(envelope, key, now) {
   return mismatch === 0;
 }
 
-function eventRow_(event, now) {
+function eventRow_(event, now, config = {}) {
   const id = event.webhookEventId;
   if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(id)) throw new Error('invalid_event_id');
   const source = event.source || {};
@@ -86,7 +139,18 @@ function eventRow_(event, now) {
   return [id, 'LINE', 'test', now.toISOString(), now.toISOString(), source.userId || '', '', conversation || '',
     id, message.id || '', message.type || '', message.type === 'text' ? message.text || '' : '',
     message.fileName || '', '', '', attachment ? '添付取得待ち' : '受信済み', '未処理', '', '', '',
-    0, '', encoded, 0, event.type || '', Number.isFinite(eventDate.getTime()) ? eventDate.toISOString() : '', 0];
+    0, '', encoded, 0, event.type || '', Number.isFinite(eventDate.getTime()) ? eventDate.toISOString() : '', 0,
+    ...forwardRoute_(source, config)];
+}
+
+function forwardRoute_(source, config) {
+  const groupId = source.type === 'group' ? source.groupId || '' : '';
+  const dedicated = /^C[0-9a-f]{32}$/.test(groupId) && groupId === config.TEST_FORWARD_GROUP_ID;
+  const verifiedOwner = dedicated && /^U[0-9a-f]{32}$/.test(config.TEST_FORWARD_OWNER_ID || '') &&
+    source.userId === config.TEST_FORWARD_OWNER_ID;
+  const route = dedicated ? '専用グループ転送' : source.type === 'group' ? '一般グループ' :
+    source.type === 'user' ? '公式直接' : 'その他';
+  return [route, source.type || '', groupId, dedicated ? (verifiedOwner ? '認可済み' : '未認可') : ''];
 }
 
 function withLock_(work) {
@@ -135,7 +199,7 @@ function setupTestStorage() {
     if (columns < HEADERS.length) sheet.insertColumnsAfter(columns, HEADERS.length - columns);
     const header = sheet.getRange(1, 1, 1, HEADERS.length);
     const current = header.getValues()[0];
-    if (current.some(value => value !== '') && JSON.stringify(current) !== JSON.stringify(HEADERS)) {
+    if (!validInboxHeader_(current)) {
       throw new Error('unexpected_sheet_schema');
     }
     header.setValues([HEADERS]);
@@ -148,6 +212,37 @@ function setupTestStorage() {
         !ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'processTestInbox')) {
       ScriptApp.newTrigger('processTestInbox').timeBased().everyMinutes(1).create();
     }
+  });
+}
+
+function validInboxHeader_(header) {
+  return header.every(value => value === '') || JSON.stringify(header) === JSON.stringify(HEADERS) ||
+    (LEGACY_HEADERS.every((name, index) => header[index] === name) &&
+      header.slice(LEGACY_HEADERS.length).every(value => value === ''));
+}
+
+function backfillTestInboxRouting() {
+  const config = storageSettings_();
+  if (!/^C[0-9a-f]{32}$/.test(config.TEST_FORWARD_GROUP_ID || '') ||
+      !/^U[0-9a-f]{32}$/.test(config.TEST_FORWARD_OWNER_ID || '')) throw new Error('verified_forward_settings_required');
+  return withLock_(() => {
+    const values = Sheets.Spreadsheets.Values;
+    const prefix = INBOX + '!';
+    const rows = values.get(config.TEST_SHEET_ID, prefix + 'A1:' + INBOX_LAST_COLUMN,
+      {valueRenderOption: 'UNFORMATTED_VALUE'}).values || [];
+    if (JSON.stringify(rows[0]) !== JSON.stringify(HEADERS)) throw new Error('setup_test_storage_first');
+    const updates = [];
+    for (let i = 1; i < rows.length && updates.length < 40; i++) {
+      const row = rows[i];
+      const archive = row[COL['原文ファイルID']];
+      if (row[COL['経路']] !== 'LINE' || row[COL['環境']] !== 'test' || row[COL['受信経路詳細']] || !archive) continue;
+      const saved = JSON.parse(DriveApp.getFileById(archive).getBlob().getDataAsString());
+      if (saved.webhookEventId !== row[COL['受信ID']]) throw new Error('archived_event_id_mismatch');
+      updates.push({range: prefix + 'AB' + (i + 1) + ':' + INBOX_LAST_COLUMN + (i + 1),
+        values: [forwardRoute_(saved.source || {}, config)]});
+    }
+    if (updates.length) values.batchUpdate({valueInputOption: 'RAW', data: updates}, config.TEST_SHEET_ID);
+    return updates.length;
   });
 }
 
@@ -183,7 +278,7 @@ function processInbox_(config, loadAttachment, allowedIds = null) {
 }
 
 function claimInbox_(sheetId, now, allowedIds = null) {
-  const rows = Sheets.Spreadsheets.Values.get(sheetId, INBOX + '!A2:AA', {
+  const rows = Sheets.Spreadsheets.Values.get(sheetId, INBOX + '!A2:' + INBOX_LAST_COLUMN, {
     valueRenderOption: 'UNFORMATTED_VALUE',
   }).values || [];
   const index = rows.findIndex(row => (!allowedIds || allowedIds.has(row[0])) &&
@@ -204,7 +299,7 @@ function writeRow_(sheetId, claim) {
 }
 
 function finishInbox_(config, claim, content, error) {
-  const range = INBOX + '!A' + claim.number + ':AA' + claim.number;
+  const range = INBOX + '!A' + claim.number + ':' + INBOX_LAST_COLUMN + claim.number;
   const current = Sheets.Spreadsheets.Values.get(config.TEST_SHEET_ID, range, {
     valueRenderOption: 'UNFORMATTED_VALUE',
   }).values;
@@ -282,7 +377,7 @@ function runSyntheticTextTest() {
   const row = eventRow_(event, new Date());
   withLock_(() => appendEvents_(isolated.TEST_SHEET_ID, [row, row]));
   processTestInbox();
-  const rows = Sheets.Spreadsheets.Values.get(isolated.TEST_SHEET_ID, INBOX + '!A2:AA').values || [];
+  const rows = Sheets.Spreadsheets.Values.get(isolated.TEST_SHEET_ID, INBOX + '!A2:' + INBOX_LAST_COLUMN).values || [];
   const found = rows.filter(entry => entry[0] === id);
   if (found.length !== 1 || found[0][COL['保存状態']] !== '保存済み' || !found[0][COL['原文ファイルID']]) {
     throw new Error('synthetic_storage_test_failed');
@@ -304,7 +399,7 @@ function runSyntheticAttachmentTest() {
   const png = Utilities.base64Decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jc0wAAAAASUVORK5CYII=');
   withLock_(() => appendEvents_(isolated.TEST_SHEET_ID, [...rows, rows[0]]));
   processInbox_(isolated, () => Utilities.newBlob(png, 'image/png'), ids);
-  const saved = (Sheets.Spreadsheets.Values.get(isolated.TEST_SHEET_ID, INBOX + '!A2:AA').values || [])
+  const saved = (Sheets.Spreadsheets.Values.get(isolated.TEST_SHEET_ID, INBOX + '!A2:' + INBOX_LAST_COLUMN).values || [])
     .filter(row => ids.has(row[0]));
   const fileIds = new Set(saved.map(row => row[COL['DriveファイルID']]));
   const correct = saved.length === ids.size && fileIds.size === ids.size && saved.every(row => {

@@ -133,9 +133,11 @@ function approveTestSend() {
   });
 }
 
-function senderHistory_(row, now, status, code = 0, requestId = '') {
+function senderHistory_(row, now, status, code = 0, requestId = '', quotaWarning = false) {
   const history = JSON.parse(row[SEND_HISTORY] || '[]');
-  history.push({at: new Date(now).toISOString(), attempt: row[SEND_ATTEMPTS], status, code, requestId});
+  const entry = {at: new Date(now).toISOString(), attempt: row[SEND_ATTEMPTS], status, code, requestId};
+  if (quotaWarning) entry.quotaWarning = true;
+  history.push(entry);
   row[SEND_HISTORY] = JSON.stringify(history);
   row[SEND_STATE] = status;
 }
@@ -189,7 +191,7 @@ function finishSend_(config, claim, outcome, now) {
   row[SEND_NEXT] = retry ? now + 60000 * 2 ** (row[SEND_ATTEMPTS] - 1) : 0;
   row[SEND_OWNER] = '';
   row[SEND_LEASE] = 0;
-  senderHistory_(row, now, retry ? '再試行待ち' : outcome.status, outcome.code, outcome.requestId);
+  senderHistory_(row, now, retry ? '再試行待ち' : outcome.status, outcome.code, outcome.requestId, outcome.quotaWarning);
   senderWrite_(config, row, index);
 }
 
@@ -210,8 +212,22 @@ function testDriveMessage_(config, body) {
   return message.length <= 5000 ? message : null;
 }
 
+function sendQuotaDecision_(config, limit, used, recipients) {
+  const cap = Number(config.TEST_MONTHLY_LIMIT || 20);
+  const percent = Number(config.TEST_QUOTA_WARNING_PERCENT || 80);
+  if (!['limited', 'none'].includes(limit?.type) || !Number.isSafeInteger(cap) || cap <= 0 ||
+      !Number.isInteger(percent) || percent < 1 || percent > 100 || !Number.isSafeInteger(used) || used < 0 ||
+      !Number.isSafeInteger(recipients) || recipients <= 0 ||
+      (limit.type === 'limited' && (!Number.isSafeInteger(limit.value) || limit.value < 0))) {
+    return {status: '条件待ち'};
+  }
+  const ceiling = limit.type === 'limited' ? Math.min(cap, limit.value) : cap;
+  const quotaWarning = used + recipients >= Math.ceil(ceiling * percent / 100);
+  return {status: recipients > ceiling - used ? '上限保留' : 'ready', quotaWarning};
+}
+
 function pushTestMessage_(config, claim) {
-  let text;
+  let text, quotaWarning;
   try {
     text = testDriveMessage_(config, claim.body);
     if (!text) return {status: '条件待ち'};
@@ -224,11 +240,10 @@ function pushTestMessage_(config, claim) {
     const quota = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/quota', options);
     const used = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/quota/consumption', options);
     if (quota.getResponseCode() !== 200 || used.getResponseCode() !== 200) return {status: '条件待ち'};
-    const limit = JSON.parse(quota.getContentText());
-    const total = JSON.parse(used.getContentText()).totalUsage;
-    const cap = Number(config.TEST_MONTHLY_LIMIT || 20);
-    const ceiling = limit.type === 'limited' ? Math.min(cap, Number(limit.value)) : cap;
-    if (!Number.isSafeInteger(total) || !Number.isSafeInteger(ceiling) || total >= ceiling) return {status: '上限保留'};
+    const capacity = sendQuotaDecision_(config, JSON.parse(quota.getContentText()),
+      JSON.parse(used.getContentText()).totalUsage, 1);
+    if (capacity.status !== 'ready') return capacity;
+    quotaWarning = capacity.quotaWarning;
   } catch (_) {
     return {status: '条件待ち'};
   }
@@ -242,13 +257,13 @@ function pushTestMessage_(config, claim) {
     const headers = Object.fromEntries(Object.entries(response.getAllHeaders()).map(([k, v]) => [k.toLowerCase(), v]));
     const accepted = headers['x-line-accepted-request-id'];
     const requestId = String(accepted || headers['x-line-request-id'] || '').slice(0, 150);
-    if (code === 200 || (code === 409 && accepted)) return {status: 'API受付成功', code, requestId};
+    if (code === 200 || (code === 409 && accepted)) return {status: 'API受付成功', code, requestId, quotaWarning};
     if (code === 429 || code >= 500) {
-      return {status: code >= 500 ? '結果不明' : '失敗', code, requestId, retry: true};
+      return {status: code >= 500 ? '結果不明' : '失敗', code, requestId, retry: true, quotaWarning};
     }
-    return {status: '失敗', code, requestId};
+    return {status: '失敗', code, requestId, quotaWarning};
   } catch (_) {
-    return {status: '結果不明'};
+    return {status: '結果不明', quotaWarning};
   }
 }
 

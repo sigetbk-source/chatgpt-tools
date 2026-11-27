@@ -68,6 +68,10 @@ assert(blockedLink.status === '条件待ち' && !pushRequest, 'unverified link s
 botId = 'production-bot';
 assert(pushTestMessage_(config, job).status === '条件待ち' && !pushRequest, 'wrong bot credentials used');
 botId = config.TEST_BOT_ID;
+assert(sendQuotaDecision_(config, {type:'limited', value:200}, 15, 1).quotaWarning &&
+  !sendQuotaDecision_(config, {type:'limited', value:200}, 14, 1).quotaWarning, 'quota warning boundary');
+assert(sendQuotaDecision_(config, {type:'limited', value:200}, 19, 2).status === '上限保留', 'recipient count ignored');
+assert(sendQuotaDecision_(config, {type:'limited', value:null}, 1, 1).status === '条件待ち', 'unknown quota did not hold');
 usage = 20;
 assert(pushTestMessage_(config, job).status === '上限保留' && !pushRequest, 'ignored quota');
 usage = 0;
@@ -78,9 +82,11 @@ assert(pushRequest.headers['X-Line-Retry-Key'] === job.id, 'unstable retry key')
 const later = claim(now + 120000);
 assert(later.id === job.id && later.owner !== job.owner, 'retry claim mismatch');
 pushCode = 409;
+usage = 15;
 const accepted = pushTestMessage_(config, later);
 finish(later, accepted, now + 120001);
 assert(queue[0][SEND_STATE] === 'API受付成功' && accepted.requestId === 'prior-request', 'duplicate response not reconciled');
+assert(JSON.parse(queue[0][SEND_HISTORY]).pop().quotaWarning, 'quota warning missing from history');
 const second = claim(now + 130000);
 assert(second.id === other.sendId, 'accepted message resent');
 throwPush = true;
