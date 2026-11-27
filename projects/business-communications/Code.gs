@@ -144,15 +144,19 @@ function folder_(parent, name) {
 
 function processTestInbox() {
   const config = storageSettings_();
+  processInbox_(config, row => attachment_(row, config.LINE_TEST_ACCESS_TOKEN));
+}
+
+function processInbox_(config, loadAttachment, allowedIds = null) {
   const stop = Date.now() + 45000;
   while (Date.now() < stop) {
-    const claim = withLock_(() => claimInbox_(config.TEST_SHEET_ID, Date.now()));
+    const claim = withLock_(() => claimInbox_(config.TEST_SHEET_ID, Date.now(), allowedIds));
     if (!claim) return;
     let content;
     let error = '';
     if (claim.row[COL['保存状態']] === '添付取得待ち' || claim.row[COL['保存状態']] === '再試行待ち') {
       try {
-        if (!existingAttachment_(config, claim.row)) content = attachment_(claim.row, config.LINE_TEST_ACCESS_TOKEN);
+        if (!existingAttachment_(config, claim.row)) content = loadAttachment(claim.row);
       } catch (_) {
         error = 'LINE添付の取得に失敗';
       }
@@ -161,11 +165,12 @@ function processTestInbox() {
   }
 }
 
-function claimInbox_(sheetId, now) {
+function claimInbox_(sheetId, now, allowedIds = null) {
   const rows = Sheets.Spreadsheets.Values.get(sheetId, INBOX + '!A2:AA', {
     valueRenderOption: 'UNFORMATTED_VALUE',
   }).values || [];
-  const index = rows.findIndex(row => ['受信済み', '添付取得待ち', '再試行待ち'].includes(row[COL['保存状態']]) &&
+  const index = rows.findIndex(row => (!allowedIds || allowedIds.has(row[0])) &&
+    ['受信済み', '添付取得待ち', '再試行待ち'].includes(row[COL['保存状態']]) &&
     Number(row[COL['次回試行時刻']] || 0) <= now && Number(row[COL['処理リース']] || 0) <= now);
   if (index < 0) return null;
   const row = rows[index];
@@ -265,4 +270,31 @@ function runSyntheticTextTest() {
   if (found.length !== 1 || found[0][COL['保存状態']] !== '保存済み' || !found[0][COL['原文ファイルID']]) {
     throw new Error('synthetic_storage_test_failed');
   }
+}
+
+function runSyntheticAttachmentTest() {
+  const config = storageSettings_();
+  if (config.TEST_BOT_ID || config.LINE_TEST_ACCESS_TOKEN) throw new Error('synthetic_only');
+  setupTestStorage();
+  const isolated = storageSettings_();
+  const timestamp = Date.now();
+  const now = new Date(timestamp);
+  const rows = ['1', '2', '3'].map((suffix, i) => eventRow_({
+    webhookEventId: 'synthetic-' + Utilities.getUuid(), timestamp, type: 'message',
+    message: i < 2 ? {type: 'file', id: suffix, fileName: 'synthetic.png'} : {type: 'image', id: suffix},
+  }, now));
+  const ids = new Set(rows.map(row => row[0]));
+  const png = Utilities.base64Decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jc0wAAAAASUVORK5CYII=');
+  withLock_(() => appendEvents_(isolated.TEST_SHEET_ID, [...rows, rows[0]]));
+  processInbox_(isolated, () => Utilities.newBlob(png, 'image/png'), ids);
+  const saved = (Sheets.Spreadsheets.Values.get(isolated.TEST_SHEET_ID, INBOX + '!A2:AA').values || [])
+    .filter(row => ids.has(row[0]));
+  const fileIds = new Set(saved.map(row => row[COL['DriveファイルID']]));
+  const correct = saved.length === ids.size && fileIds.size === ids.size && saved.every(row => {
+    if (row[COL['保存状態']] !== '保存済み' || !row[COL['原文ファイルID']] || !row[COL['DriveファイルID']]) return false;
+    const file = DriveApp.getFileById(row[COL['DriveファイルID']]);
+    return file.getName() === attachmentName_(row) && file.getMimeType() === 'image/png' &&
+      Utilities.base64Encode(file.getBlob().getBytes()) === Utilities.base64Encode(png);
+  });
+  if (!correct) throw new Error('synthetic_attachment_test_failed');
 }
