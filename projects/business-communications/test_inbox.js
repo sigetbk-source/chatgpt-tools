@@ -54,11 +54,13 @@ const UrlFetchApp = {fetch: () => {
     setName: name => ({name})})};
 }};
 const Sheets = {Spreadsheets: {Values: {
-  get: (_, range) => {
+  get: (_, range, options = {}) => {
+    const rendered = row => row.map(value => typeof value !== 'number' || options.valueRenderOption === 'UNFORMATTED_VALUE'
+      ? value : String(value));
     if (range.endsWith('A2:A')) return {values: rows.map(row => [row[0]])};
-    if (range.endsWith('A2:AA')) return {values: rows.map(row => row.slice())};
+    if (range.endsWith('A2:AA')) return {values: rows.map(rendered)};
     const number = Number(range.split('!A')[1].split(':')[0]);
-    return {values: [rows[number - 2].slice()]};
+    return {values: [rendered(rows[number - 2])]};
   },
   append: (body, _, range, options) => {
     check(locked && options.valueInputOption === 'RAW', 'ledger writes must use lock and RAW');

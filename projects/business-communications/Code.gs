@@ -162,7 +162,9 @@ function processTestInbox() {
 }
 
 function claimInbox_(sheetId, now) {
-  const rows = Sheets.Spreadsheets.Values.get(sheetId, INBOX + '!A2:AA').values || [];
+  const rows = Sheets.Spreadsheets.Values.get(sheetId, INBOX + '!A2:AA', {
+    valueRenderOption: 'UNFORMATTED_VALUE',
+  }).values || [];
   const index = rows.findIndex(row => ['受信済み', '添付取得待ち', '再試行待ち'].includes(row[COL['保存状態']]) &&
     Number(row[COL['次回試行時刻']] || 0) <= now && Number(row[COL['処理リース']] || 0) <= now);
   if (index < 0) return null;
@@ -180,8 +182,11 @@ function writeRow_(sheetId, claim) {
 }
 
 function finishInbox_(config, claim, content, error) {
-  const current = Sheets.Spreadsheets.Values.get(config.TEST_SHEET_ID, INBOX + '!A' + claim.number + ':AA' + claim.number).values;
-  if (!current || current[0][0] !== claim.row[0] || current[0][COL['処理リース']] !== claim.lease) return;
+  const range = INBOX + '!A' + claim.number + ':AA' + claim.number;
+  const current = Sheets.Spreadsheets.Values.get(config.TEST_SHEET_ID, range, {
+    valueRenderOption: 'UNFORMATTED_VALUE',
+  }).values;
+  if (!current || current[0][0] !== claim.row[0] || Number(current[0][COL['処理リース']]) !== claim.lease) return;
   const row = claim.row;
   const month = receiptMonth_(row);
   try {
