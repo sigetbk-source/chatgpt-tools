@@ -11,10 +11,9 @@ const COL = Object.fromEntries(HEADERS.map((name, index) => [name, index]));
 const ATTACHMENT_TYPES = ['image', 'video', 'audio', 'file'];
 const MAX_ATTEMPTS = 6;
 
-function settings_() {
+function storageSettings_() {
   const p = PropertiesService.getScriptProperties().getProperties();
-  if (p.ENVIRONMENT !== 'test' || !p.TEST_ROOT_ID || !p.TEST_BOT_ID ||
-      !p.WORKER_SECRET || p.WORKER_SECRET.length < 32) throw new Error('test_config_required');
+  if (p.ENVIRONMENT !== 'test' || !p.TEST_ROOT_ID) throw new Error('test_config_required');
   return p;
 }
 
@@ -24,7 +23,8 @@ function postResult_(ok) {
 
 function doPost(e) {
   try {
-    const config = settings_();
+    const config = storageSettings_();
+    if (!config.TEST_BOT_ID || !config.WORKER_SECRET || config.WORKER_SECRET.length < 32) return postResult_(false);
     const body = e && e.postData && e.postData.contents;
     if (!body || body.length > 710000) return postResult_(false);
     const envelope = JSON.parse(body);
@@ -96,7 +96,7 @@ function appendEvents_(sheetId, rows) {
 }
 
 function setupTestStorage() {
-  const config = settings_();
+  const config = storageSettings_();
   const props = PropertiesService.getScriptProperties();
   withLock_(() => {
     const root = DriveApp.getFolderById(config.TEST_ROOT_ID);
@@ -127,7 +127,8 @@ function setupTestStorage() {
     const attachments = folder_(root, ATTACHMENTS);
     SpreadsheetApp.flush();
     props.setProperties({TEST_SHEET_ID: ledger.getId(), ARCHIVE_ID: archive.getId(), ATTACHMENTS_ID: attachments.getId()});
-    if (!ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'processTestInbox')) {
+    if (config.TEST_BOT_ID && config.LINE_TEST_ACCESS_TOKEN && config.WORKER_SECRET && config.WORKER_SECRET.length >= 32 &&
+        !ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'processTestInbox')) {
       ScriptApp.newTrigger('processTestInbox').timeBased().everyMinutes(1).create();
     }
   });
@@ -142,8 +143,8 @@ function folder_(parent, name) {
 }
 
 function processTestInbox() {
-  const config = settings_();
-  const stop = Date.now() + 45_000;
+  const config = storageSettings_();
+  const stop = Date.now() + 45000;
   while (Date.now() < stop) {
     const claim = withLock_(() => claimInbox_(config.TEST_SHEET_ID, Date.now()));
     if (!claim) return;
@@ -167,7 +168,7 @@ function claimInbox_(sheetId, now) {
   if (index < 0) return null;
   const row = rows[index];
   while (row.length < HEADERS.length) row.push('');
-  const claim = {row, number: index + 2, lease: now + 7 * 60_000};
+  const claim = {row, number: index + 2, lease: now + 7 * 60000};
   row[COL['処理リース']] = claim.lease;
   writeRow_(sheetId, claim);
   return claim;
@@ -210,7 +211,7 @@ function finishInbox_(config, claim, content, error) {
   row[COL['エラー']] = error;
   row[COL['処理リース']] = 0;
   const retry = error && attempts < MAX_ATTEMPTS;
-  row[COL['次回試行時刻']] = retry ? Date.now() + 60_000 * 2 ** (attempts - 1) : 0;
+  row[COL['次回試行時刻']] = retry ? Date.now() + 60000 * 2 ** (attempts - 1) : 0;
   row[COL['保存状態']] = retry ? '再試行待ち' : error ? '保存失敗' : '保存済み';
   writeRow_(config.TEST_SHEET_ID, claim);
 }
@@ -241,4 +242,22 @@ function existingAttachment_(config, row) {
 function attachmentName_(row) {
   const basename = row[COL['元ファイル名']].replace(/[\/\\\x00-\x1f]/g, '_').slice(0, 180);
   return row[0] + '_' + (basename || row[COL['メッセージ種別']]);
+}
+
+function runSyntheticTextTest() {
+  const config = storageSettings_();
+  if (config.TEST_BOT_ID || config.LINE_TEST_ACCESS_TOKEN) throw new Error('synthetic_only');
+  setupTestStorage();
+  const isolated = storageSettings_();
+  const id = 'synthetic-' + Utilities.getUuid();
+  const event = {webhookEventId: id, type: 'message', timestamp: Date.now(),
+    message: {type: 'text', text: '受信台帳・原文保存の動作確認'}};
+  const row = eventRow_(event, new Date());
+  withLock_(() => appendEvents_(isolated.TEST_SHEET_ID, [row, row]));
+  processTestInbox();
+  const rows = Sheets.Spreadsheets.Values.get(isolated.TEST_SHEET_ID, INBOX + '!A2:AA').values || [];
+  const found = rows.filter(entry => entry[0] === id);
+  if (found.length !== 1 || found[0][COL['保存状態']] !== '保存済み' || !found[0][COL['原文ファイルID']]) {
+    throw new Error('synthetic_storage_test_failed');
+  }
 }

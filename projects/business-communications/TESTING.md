@@ -17,6 +17,8 @@ PythonテストはHTTPハンドラーの入力・応答をメモリ上で検証�
 
 ## テスト環境へ導入
 
+LINE接続前に、専用GASに `ENVIRONMENT=test` と `TEST_ROOT_ID` だけを設定して `runSyntheticTextTest` を実行できる。LINE通信と定期トリガー登録を伴わず、非公開のテストルートに合成テキストを1件だけ保存し、台帳の重複排除と原文ログを検証する。初回はテストGASの権限を確認する。
+
 1. マイドライブに非公開の `業務連絡管理（テスト専用）` フォルダを用意する。新しいスタンドアロンApps Scriptに `Code.gs` と `appsscript.json` を配置して、Advanced Sheetsサービスを有効にする。既存の案件管理GASとは別プロジェクトとする。
 2. 専用GASのスクリプトプロパティに `ENVIRONMENT=test`、`TEST_ROOT_ID`、`TEST_BOT_ID`、`WORKER_SECRET`、`LINE_TEST_ACCESS_TOKEN` を設定する。ワーカー共有鍵は新規の十分にランダムな32文字以上。bot IDとトークンはテストチャネルの組を使う。
 3. `setupTestStorage` を実行する。テスト用ルートに受信スプレッドシート、原文ログ／受信ファイルの子フォルダを作成し、テストGASに処理トリガーを登録する。Webアプリは所有者として実行し、署名付きPOSTだけ業務処理を通す。Apps ScriptのURLは `/exec` を用いる。
