@@ -1,0 +1,244 @@
+const INBOX = '受信履歴';
+const ARCHIVE = '原文ログ';
+const ATTACHMENTS = '受信ファイル';
+const HEADERS = [
+  '受信ID', '経路', '環境', '受信日時', '記録日時', '送信者ID', '表示名', '会話ID',
+  'イベントID', 'メッセージID', 'メッセージ種別', '本文', '元ファイル名', 'DriveファイルID',
+  'URL', '保存状態', '振り分け状態', '案件ID', '移動先ID', 'エラー', '試行回数',
+  '原文ファイルID', '原文保存待ち', '次回試行時刻', 'イベント種別', 'LINE発生日時', '処理リース',
+];
+const COL = Object.fromEntries(HEADERS.map((name, index) => [name, index]));
+const ATTACHMENT_TYPES = ['image', 'video', 'audio', 'file'];
+const MAX_ATTEMPTS = 6;
+
+function settings_() {
+  const p = PropertiesService.getScriptProperties().getProperties();
+  if (p.ENVIRONMENT !== 'test' || !p.TEST_ROOT_ID || !p.TEST_BOT_ID ||
+      !p.WORKER_SECRET || p.WORKER_SECRET.length < 32) throw new Error('test_config_required');
+  return p;
+}
+
+function postResult_(ok) {
+  return ContentService.createTextOutput(JSON.stringify({ok})).setMimeType(ContentService.MimeType.JSON);
+}
+
+function doPost(e) {
+  try {
+    const config = settings_();
+    const body = e && e.postData && e.postData.contents;
+    if (!body || body.length > 710000) return postResult_(false);
+    const envelope = JSON.parse(body);
+    if (!validEnvelope_(envelope, config.WORKER_SECRET, Date.now())) return postResult_(false);
+    const raw = Utilities.newBlob(Utilities.base64Decode(envelope.payload)).getDataAsString('UTF-8');
+    const payload = JSON.parse(raw);
+    if (payload.destination !== config.TEST_BOT_ID || !Array.isArray(payload.events)) return postResult_(false);
+    const rows = payload.events.map(event => eventRow_(event, new Date()));
+    if (rows.length) withLock_(() => appendEvents_(config.TEST_SHEET_ID, rows));
+    return postResult_(true);
+  } catch (_) {
+    return postResult_(false);
+  }
+}
+
+function validEnvelope_(envelope, key, now) {
+  if (!envelope || typeof envelope.timestamp !== 'string' || !/^\d{10}$/.test(envelope.timestamp) ||
+      Math.abs(now / 1000 - Number(envelope.timestamp)) > 120 || typeof envelope.payload !== 'string' ||
+      typeof envelope.signature !== 'string' || envelope.signature.length !== 44) return false;
+  const check = Utilities.base64Encode(Utilities.computeHmacSha256Signature(
+    envelope.timestamp + '.' + envelope.payload, key, Utilities.Charset.UTF_8));
+  let mismatch = 0;
+  for (let i = 0; i < check.length; i++) mismatch |= check.charCodeAt(i) ^ envelope.signature.charCodeAt(i);
+  return mismatch === 0;
+}
+
+function eventRow_(event, now) {
+  const id = event.webhookEventId;
+  if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(id)) throw new Error('invalid_event_id');
+  const source = event.source || {};
+  const message = event.message || {};
+  const attachment = event.type === 'message' && ATTACHMENT_TYPES.includes(message.type);
+  if (attachment && (typeof message.id !== 'string' || !/^\d+$/.test(message.id))) {
+    throw new Error('invalid_attachment_id');
+  }
+  const raw = Object.assign({}, event);
+  delete raw.replyToken;
+  const encoded = JSON.stringify(raw);
+  if (encoded.length > 45000) throw new Error('event_too_large');
+  const conversation = source.groupId || source.roomId || (source.type === 'user' ? source.userId : '');
+  const eventDate = new Date(event.timestamp);
+  return [id, 'LINE', 'test', now.toISOString(), now.toISOString(), source.userId || '', '', conversation || '',
+    id, message.id || '', message.type || '', message.type === 'text' ? message.text || '' : '',
+    message.fileName || '', '', '', attachment ? '添付取得待ち' : '受信済み', '未処理', '', '', '',
+    0, '', encoded, 0, event.type || '', Number.isFinite(eventDate.getTime()) ? eventDate.toISOString() : '', 0];
+}
+
+function withLock_(work) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(4000)) throw new Error('worker_busy');
+  try {
+    return work();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function appendEvents_(sheetId, rows) {
+  const result = Sheets.Spreadsheets.Values.get(sheetId, INBOX + '!A2:A');
+  const seen = new Set((result.values || []).map(row => row[0]));
+  const fresh = rows.filter(row => {
+    if (seen.has(row[0])) return false;
+    seen.add(row[0]);
+    return true;
+  });
+  if (fresh.length) Sheets.Spreadsheets.Values.append({values: fresh}, sheetId, INBOX + '!A1', {
+    valueInputOption: 'RAW', insertDataOption: 'INSERT_ROWS',
+  });
+}
+
+function setupTestStorage() {
+  const config = settings_();
+  const props = PropertiesService.getScriptProperties();
+  withLock_(() => {
+    const root = DriveApp.getFolderById(config.TEST_ROOT_ID);
+    if (root.getName() !== '業務連絡管理（テスト専用）' || root.getSharingAccess() !== DriveApp.Access.PRIVATE) {
+      throw new Error('test_root_must_be_private');
+    }
+    const name = '業務連絡台帳（テスト専用）';
+    const existing = root.getFilesByName(name);
+    let ledger;
+    if (existing.hasNext()) {
+      ledger = SpreadsheetApp.openById(existing.next().getId());
+      if (existing.hasNext()) throw new Error('duplicate_test_spreadsheets');
+    } else {
+      ledger = SpreadsheetApp.create(name);
+      DriveApp.getFileById(ledger.getId()).moveTo(root);
+    }
+    const sheet = ledger.getSheetByName(INBOX) || ledger.insertSheet(INBOX);
+    const columns = sheet.getMaxColumns();
+    if (columns < HEADERS.length) sheet.insertColumnsAfter(columns, HEADERS.length - columns);
+    const header = sheet.getRange(1, 1, 1, HEADERS.length);
+    const current = header.getValues()[0];
+    if (current.some(value => value !== '') && JSON.stringify(current) !== JSON.stringify(HEADERS)) {
+      throw new Error('unexpected_sheet_schema');
+    }
+    header.setValues([HEADERS]);
+    sheet.setFrozenRows(1);
+    const archive = folder_(root, ARCHIVE);
+    const attachments = folder_(root, ATTACHMENTS);
+    SpreadsheetApp.flush();
+    props.setProperties({TEST_SHEET_ID: ledger.getId(), ARCHIVE_ID: archive.getId(), ATTACHMENTS_ID: attachments.getId()});
+    if (!ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'processTestInbox')) {
+      ScriptApp.newTrigger('processTestInbox').timeBased().everyMinutes(1).create();
+    }
+  });
+}
+
+function folder_(parent, name) {
+  const matches = parent.getFoldersByName(name);
+  if (!matches.hasNext()) return parent.createFolder(name);
+  const folder = matches.next();
+  if (matches.hasNext()) throw new Error('duplicate_folder');
+  return folder;
+}
+
+function processTestInbox() {
+  const config = settings_();
+  const stop = Date.now() + 45_000;
+  while (Date.now() < stop) {
+    const claim = withLock_(() => claimInbox_(config.TEST_SHEET_ID, Date.now()));
+    if (!claim) return;
+    let content;
+    let error = '';
+    if (claim.row[COL['保存状態']] === '添付取得待ち' || claim.row[COL['保存状態']] === '再試行待ち') {
+      try {
+        if (!existingAttachment_(config, claim.row)) content = attachment_(claim.row, config.LINE_TEST_ACCESS_TOKEN);
+      } catch (_) {
+        error = 'LINE添付の取得に失敗';
+      }
+    }
+    withLock_(() => finishInbox_(config, claim, content, error));
+  }
+}
+
+function claimInbox_(sheetId, now) {
+  const rows = Sheets.Spreadsheets.Values.get(sheetId, INBOX + '!A2:AA').values || [];
+  const index = rows.findIndex(row => ['受信済み', '添付取得待ち', '再試行待ち'].includes(row[COL['保存状態']]) &&
+    Number(row[COL['次回試行時刻']] || 0) <= now && Number(row[COL['処理リース']] || 0) <= now);
+  if (index < 0) return null;
+  const row = rows[index];
+  while (row.length < HEADERS.length) row.push('');
+  const claim = {row, number: index + 2, lease: now + 7 * 60_000};
+  row[COL['処理リース']] = claim.lease;
+  writeRow_(sheetId, claim);
+  return claim;
+}
+
+function writeRow_(sheetId, claim) {
+  Sheets.Spreadsheets.Values.update({values: [claim.row]}, sheetId, INBOX + '!A' + claim.number,
+    {valueInputOption: 'RAW'});
+}
+
+function finishInbox_(config, claim, content, error) {
+  const current = Sheets.Spreadsheets.Values.get(config.TEST_SHEET_ID, INBOX + '!A' + claim.number + ':AA' + claim.number).values;
+  if (!current || current[0][0] !== claim.row[0] || current[0][COL['処理リース']] !== claim.lease) return;
+  const row = claim.row;
+  const month = receiptMonth_(row);
+  try {
+    if (!row[COL['原文ファイルID']]) {
+      const folder = folder_(DriveApp.getFolderById(config.ARCHIVE_ID), month);
+      const name = row[0] + '.json';
+      const files = folder.getFilesByName(name);
+      const archive = files.hasNext() ? files.next() : folder.createFile(name, row[COL['原文保存待ち']], MimeType.PLAIN_TEXT);
+      row[COL['原文ファイルID']] = archive.getId();
+      row[COL['原文保存待ち']] = '';
+    }
+    let file = existingAttachment_(config, row);
+    if (!file && content) {
+      const folder = folder_(DriveApp.getFolderById(config.ATTACHMENTS_ID), month);
+      file = folder.createFile(content.setName(attachmentName_(row)));
+    }
+    if (file) {
+      row[COL['DriveファイルID']] = file.getId();
+      row[COL['URL']] = file.getUrl();
+      if (error === 'LINE添付の取得に失敗') error = '';
+    }
+  } catch (_) {
+    error = 'Driveへの保存に失敗';
+  }
+  const attempts = Number(row[COL['試行回数']]) + 1;
+  row[COL['試行回数']] = attempts;
+  row[COL['エラー']] = error;
+  row[COL['処理リース']] = 0;
+  const retry = error && attempts < MAX_ATTEMPTS;
+  row[COL['次回試行時刻']] = retry ? Date.now() + 60_000 * 2 ** (attempts - 1) : 0;
+  row[COL['保存状態']] = retry ? '再試行待ち' : error ? '保存失敗' : '保存済み';
+  writeRow_(config.TEST_SHEET_ID, claim);
+}
+
+function attachment_(row, token) {
+  if (!ATTACHMENT_TYPES.includes(row[COL['メッセージ種別']])) return null;
+  const id = row[COL['メッセージID']];
+  if (!token || !/^\d+$/.test(id)) throw new Error('attachment_config_required');
+  const response = UrlFetchApp.fetch('https://api-data.line.me/v2/bot/message/' + id + '/content', {
+    headers: {Authorization: 'Bearer ' + token}, followRedirects: false, muteHttpExceptions: true,
+  });
+  if (response.getResponseCode() !== 200) throw new Error('attachment_not_available');
+  return response.getBlob();
+}
+
+function receiptMonth_(row) {
+  return Utilities.formatDate(new Date(row[COL['受信日時']]), 'Asia/Tokyo', 'yyyy-MM');
+}
+
+function existingAttachment_(config, row) {
+  if (!ATTACHMENT_TYPES.includes(row[COL['メッセージ種別']])) return null;
+  const folders = DriveApp.getFolderById(config.ATTACHMENTS_ID).getFoldersByName(receiptMonth_(row));
+  if (!folders.hasNext()) return null;
+  const files = folders.next().getFilesByName(attachmentName_(row));
+  return files.hasNext() ? files.next() : null;
+}
+
+function attachmentName_(row) {
+  const basename = row[COL['元ファイル名']].replace(/[\/\\\x00-\x1f]/g, '_').slice(0, 180);
+  return row[0] + '_' + (basename || row[COL['メッセージ種別']]);
+}

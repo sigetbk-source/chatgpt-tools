@@ -1,0 +1,7 @@
+FROM python:3.12-slim
+WORKDIR /app
+COPY relay.py .
+ENV HOST=0.0.0.0 PYTHONDONTWRITEBYTECODE=1
+USER 65534:65534
+EXPOSE 8080
+CMD ["python", "relay.py"]
